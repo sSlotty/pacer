@@ -330,7 +330,7 @@ CLI: `python main.py [--dry-run] [--backfill N] [--date YYYY-MM-DD]`
 
 - trigger: `schedule: cron "0 1 * * *"` (08:00 เวลาไทย เผื่อเวลา sync ข้อมูลการนอน) และ `workflow_dispatch`
 - `permissions: contents: write`, `concurrency: garmin-daily`
-- ขั้นตอน: `actions/checkout@v4` → `actions/setup-python@v5` (3.12, cache pip) → `pip install -r requirements.txt` → `python main.py` → commit `data/garmin.db` กลับ repo ด้วยชื่อ `github-actions[bot]` เฉพาะเมื่อมีการเปลี่ยนแปลง (`git diff --cached --quiet || git commit`)
+- ขั้นตอน: `actions/checkout@v7` → `actions/setup-python@v7` (3.12, cache pip) — ใช้ major เวอร์ชันที่รันบน Node 24 เพื่อไม่ให้เจอ deprecation warning → `pip install -r requirements.txt` → `python main.py` → commit `data/garmin.db` กลับ repo ด้วยชื่อ `github-actions[bot]` เฉพาะเมื่อมีการเปลี่ยนแปลง (`git diff --cached --quiet || git commit`)
 - secrets: `GARMINTOKENS_BASE64`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (ถ้าใช้), `DISCORD_WEBHOOK_URL`
 - variables: `RACES` (JSON ตามหัวข้อ 4.1), และไม่บังคับ `LLM_PROVIDER`, `CLAUDE_MODEL`, `OPENAI_MODEL`, `TRAIL_ELEV_THRESHOLD`
 - ขั้น commit DB ใช้ `if: always()` เพื่อเก็บข้อมูลที่ดึงมาแล้วแม้ส่ง Discord ไม่สำเร็จ และ push เฉพาะเมื่อมี commit ใหม่
