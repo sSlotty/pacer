@@ -1,0 +1,52 @@
+name: Garmin daily running coach
+
+on:
+  schedule:
+    - cron: "0 1 * * *" # 08:00 Asia/Bangkok
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency: garmin-daily
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run daily summary
+        env:
+          GARMINTOKENS_BASE64: ${{ secrets.GARMINTOKENS_BASE64 }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          RACES: ${{ vars.RACES }}
+          LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
+          CLAUDE_MODEL: ${{ vars.CLAUDE_MODEL }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          TRAIL_ELEV_THRESHOLD: ${{ vars.TRAIL_ELEV_THRESHOLD }}
+        run: python main.py
+
+      - name: Commit database
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -f data/garmin.db ]; then
+            git add data/garmin.db
+            if ! git diff --cached --quiet; then
+              git commit -m "chore: update garmin.db ($(date -u +%F))"
+              git push
+            fi
+          fi

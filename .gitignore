@@ -1,0 +1,20 @@
+# Secrets — never commit
+garmin_tokens.b64
+garmin_tokens.json
+.env
+.env.*
+!.env.example
+.garminconnect/
+~/.garminconnect
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
