@@ -259,12 +259,13 @@ list ของ `{level: "red"|"yellow"|"info", message: <ภาษาไทย>}
 
 `summarize(result, providers) -> (sections, source)` ลองผู้ให้บริการตามลำดับใน `LLM_PROVIDER` (ข้ามเจ้าที่ไม่มี key) คืน dict หัวข้อตามตารางด้านล่าง และ `source` = ชื่อที่แสดงใน footer (`Claude` / `ChatGPT`) ถ้าล้มเหลวทุกเจ้าให้ raise แล้ว main ใช้ `fallback_sections()` ทั้งสองเจ้าใช้ system prompt และ JSON schema เดียวกัน
 
-**OpenAI**: `openai.OpenAI().responses.create(model=OPENAI_MODEL, instructions=SYSTEM_PROMPT, input=..., max_output_tokens=6000, text={"format": {"type": "json_schema", "name": "running_summary", "schema": ..., "strict": True}})` อ่านผลจาก `response.output_text` ถ้า `status` ไม่ใช่ `completed` ให้ถือว่าล้มเหลว (max_output_tokens สูงกว่า Claude เพราะรวม reasoning token)
+**OpenAI**: `openai.OpenAI().responses.create(model=OPENAI_MODEL, instructions=SYSTEM_PROMPT, input=..., max_output_tokens=4000, reasoning={"effort": "low"} (ถ้าโมเดลไม่รับให้ส่งซ้ำโดยไม่ใส่ เพราะ reasoning token คิดเงินเป็น output), text={"format": {"type": "json_schema", "name": "running_summary", "schema": ..., "strict": True}})` อ่านผลจาก `response.output_text` ถ้า `status` ไม่ใช่ `completed` ให้ถือว่าล้มเหลว (max_output_tokens สูงกว่า Claude เพราะรวม reasoning token)
 
 **Claude**:
 
-- ใช้ `anthropic.Anthropic().messages.create(model=CLAUDE_MODEL, max_tokens=3000, system=..., messages=[...], output_config={"format": {"type": "json_schema", ...}})` ส่งผล `analyze()` เป็น JSON (`ensure_ascii=False`)
-  - max_tokens เป็น 3000 เพราะภาษาไทยใช้ token มากและคำตอบเป็น JSON (ความยาวข้อความคุมด้วย prompt)
+- ใช้ `anthropic.Anthropic().messages.create(model=CLAUDE_MODEL, max_tokens=2000, system=..., messages=[...], output_config={"format": {"type": "json_schema", ...}})` ส่งผล `analyze()` เป็น JSON (`ensure_ascii=False`)
+  - ค่าใช้จ่ายเกือบทั้งหมดคือ **โทเคนขาออกภาษาไทย** (ภาษาไทยกิน token มากกว่าอังกฤษ 2–4 เท่าต่อตัวอักษร) จึงคุมความยาวแต่ละหัวข้อใน prompt และตั้ง max_tokens ไว้ที่ 2000
+  - ทุกครั้งที่เรียกสำเร็จ ให้ log จำนวนโทเคนจาก `response.usage` (input / output / reasoning) เพื่อตรวจสอบกับ dashboard ของผู้ให้บริการได้
 - ส่ง `thinking={"type": "disabled"}` (โมเดลรุ่นใหม่เปิด thinking เป็นค่าเริ่มต้น) ถ้าโมเดลตอบ 400 ที่เกี่ยวกับ thinking ให้ส่งซ้ำโดยไม่ใส่ `thinking`
 - ถ้า `stop_reason` เป็น `refusal` หรือ `max_tokens`, JSON ไม่ถูกต้อง หรือไม่มีข้อความ ให้ถือว่าล้มเหลวและใช้ fallback
 - **คำตอบเป็น JSON แยกตามหัวข้อ** (ทุก key เป็น string, `""` ถ้าไม่มีเนื้อหา) เพื่อจัดวางเป็นส่วน ๆ ใน embed เดียว ตัวเลขหลักแสดงใน fields แล้ว ข้อความจึงเน้นการตีความ ไม่ต้องซ้ำตัวเลขหรือ flags:

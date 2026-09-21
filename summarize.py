@@ -10,7 +10,7 @@ import logging
 
 log = logging.getLogger(__name__)
 
-MAX_TOKENS = 3000
+MAX_TOKENS = 2000  # Thai output dominates the bill; sections are capped in the prompt too
 SECTION_KEYS = ("headline", "recovery", "running", "load", "races", "session", "recommendation")
 
 OUTPUT_SCHEMA = {
@@ -24,13 +24,15 @@ SYSTEM_PROMPT = """คุณคือโค้ชวิ่งที่เชี�
 
 ข้อมูลที่ได้รับเป็น JSON จากระบบวิเคราะห์ข้อมูล Garmin ของวันนั้น ข้อความของคุณจะอยู่ในการ์ด Discord ใบเดียวที่ **แสดงตัวเลขหลักและ flags ไว้ให้แล้ว** ดังนั้นให้เน้นการตีความและสิ่งที่ควรทำ ไม่ต้องไล่ตัวเลขซ้ำ (อ้างตัวเลขได้เฉพาะที่จำเป็นต่อเหตุผล) ตอบเป็น JSON:
 
-- headline: สรุปสถานะวันนี้ 1 ประโยค (≤ 150 ตัวอักษร) ถ้า status เป็น "red" ต้องขึ้นต้นด้วย ⚠️ และบอกให้ลดหรือพัก
-- recovery: ร่างกายฟื้นตัวดีแค่ไหนและเพราะอะไร (≤ 200 ตัวอักษร)
-- running: ภาพรวมการวิ่ง 7 วันและแนวโน้ม แยก road / trail เฉพาะประเภทที่มีการวิ่ง (≤ 200 ตัวอักษร)
-- load: โหลดและความเสี่ยงบาดเจ็บหมายความว่าอะไร ถ้า load_data_insufficient เป็น true ให้บอกว่าข้อมูลยังน้อย (≤ 200 ตัวอักษร)
-- races: สิ่งที่ควรโฟกัสสำหรับรายการแข่ง เน้นรายการ A ถ้า races ว่างให้ตอบ "" (≤ 250 ตัวอักษร)
+- headline: สรุปสถานะวันนี้ 1 ประโยค (≤ 100 ตัวอักษร) ถ้า status เป็น "red" ต้องขึ้นต้นด้วย ⚠️ และบอกให้ลดหรือพัก
+- recovery: ร่างกายฟื้นตัวดีแค่ไหนและเพราะอะไร (≤ 120 ตัวอักษร)
+- running: ภาพรวมการวิ่ง 7 วันและแนวโน้ม แยก road / trail เฉพาะประเภทที่มีการวิ่ง (≤ 120 ตัวอักษร)
+- load: โหลดและความเสี่ยงบาดเจ็บหมายความว่าอะไร ถ้า load_data_insufficient เป็น true ให้บอกว่าข้อมูลยังน้อย (≤ 120 ตัวอักษร)
+- races: สิ่งที่ควรโฟกัสสำหรับรายการแข่ง เน้นรายการ A ถ้า races ว่างให้ตอบ "" (≤ 150 ตัวอักษร)
 - session: ชื่อประเภทการซ้อมวันนี้สั้น ๆ เลือกหนึ่งจาก: พัก, Easy run, Long run, Workout, Hill, Trail session
-- recommendation: การซ้อมวันนี้ ระยะหรือเวลาโดยประมาณ ความหนัก และเหตุผลสั้น ๆ (≤ 350 ตัวอักษร)
+- recommendation: การซ้อมวันนี้ ระยะหรือเวลาโดยประมาณ ความหนัก และเหตุผลสั้น ๆ (≤ 250 ตัวอักษร)
+
+เขียนให้สั้นที่สุดเท่าที่ยังได้ใจความ ทุกหัวข้อรวมกันไม่ควรเกิน 700 ตัวอักษร
 
 หลักการแนะนำ:
 - ให้สอดคล้องกับ training_phase และ type ของรายการที่กำหนด phase (phase_race) เช่น ช่วง Build ของรายการ trail ควรมี hill/vert, ช่วง Peak ซ้อมเฉพาะสนาม, ช่วง Taper ลดระยะแต่คงความเข้มบางส่วน, ช่วง Recovery เน้นฟื้นตัว
@@ -46,7 +48,8 @@ SYSTEM_PROMPT = """คุณคือโค้ชวิ่งที่เชี�
 รูปแบบ: ภาษาพูดสั้น ๆ ใช้ **ตัวหนา** ได้ ไม่ต้องใส่หัวข้อ วันที่ หรือ bullet ยาว ๆ เพราะการ์ดจัดหัวข้อให้แล้ว"""
 
 
-OPENAI_MAX_OUTPUT_TOKENS = 6000  # includes reasoning tokens on reasoning models
+OPENAI_MAX_OUTPUT_TOKENS = 4000  # includes reasoning tokens on reasoning models
+OPENAI_REASONING_EFFORT = "low"  # this task is summarizing numbers we already computed
 PROVIDER_LABEL = {"anthropic": "Claude", "openai": "ChatGPT"}
 
 
@@ -57,6 +60,23 @@ class SummaryError(Exception):
 def _user_message(result: dict) -> str:
     payload = json.dumps(result, ensure_ascii=False, indent=1)
     return f"ข้อมูลวันนี้:\n```json\n{payload}\n```"
+
+
+def _log_usage(provider: str, model: str, usage) -> None:
+    """Log token counts so spend can be checked against the provider's dashboard."""
+    if usage is None:
+        return
+    fields = {name: getattr(usage, name, None) for name in ("input_tokens", "output_tokens")}
+    details = getattr(usage, "output_tokens_details", None)
+    reasoning = getattr(details, "reasoning_tokens", None)
+    log.info(
+        "%s (%s) usage: input=%s output=%s%s",
+        provider,
+        model,
+        fields["input_tokens"],
+        fields["output_tokens"],
+        f" (reasoning={reasoning})" if reasoning else "",
+    )
 
 
 def _parse_sections(text: str, provider: str) -> dict:
@@ -98,6 +118,7 @@ def _summarize_anthropic(result: dict, model: str, api_key: str | None) -> dict:
         raise SummaryError("Claude declined the request")
     if response.stop_reason == "max_tokens":
         raise SummaryError("Claude response was cut off at max_tokens")
+    _log_usage("anthropic", model, getattr(response, "usage", None))
     text = "".join(b.text for b in response.content if getattr(b, "type", None) == "text").strip()
     return _parse_sections(text, "Claude")
 
@@ -106,7 +127,7 @@ def _summarize_openai(result: dict, model: str, api_key: str | None) -> dict:
     import openai
 
     client = openai.OpenAI(api_key=api_key) if api_key else openai.OpenAI()
-    response = client.responses.create(
+    kwargs = dict(
         model=model,
         instructions=SYSTEM_PROMPT,
         input=_user_message(result),
@@ -120,6 +141,14 @@ def _summarize_openai(result: dict, model: str, api_key: str | None) -> dict:
             }
         },
     )
+    try:
+        # Reasoning tokens are billed as output; this task does not need deep reasoning.
+        response = client.responses.create(**kwargs, reasoning={"effort": OPENAI_REASONING_EFFORT})
+    except openai.BadRequestError as e:
+        if "reasoning" not in str(e).lower():
+            raise
+        response = client.responses.create(**kwargs)
+    _log_usage("openai", model, getattr(response, "usage", None))
     if response.status != "completed":
         reason = getattr(response.incomplete_details, "reason", None)
         raise SummaryError(f"OpenAI response not completed (status={response.status}, reason={reason})")

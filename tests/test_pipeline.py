@@ -448,6 +448,7 @@ class ProviderTests(unittest.TestCase):
 
     def fake_openai(self, status="completed", text=None, reason=None):
         response = mock.Mock(status=status, output_text=text if text is not None else json.dumps(sections()))
+        response.usage = mock.Mock(input_tokens=900, output_tokens=700, output_tokens_details=None)
         response.incomplete_details = mock.Mock(reason=reason) if reason else None
         module = mock.MagicMock()
         module.OpenAI.return_value.responses.create.return_value = response
@@ -466,6 +467,27 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual((fmt["type"], fmt["strict"]), ("json_schema", True))
         self.assertEqual(fmt["schema"]["required"], list(summarize.SECTION_KEYS))
         self.assertIn('"status"', kwargs["input"])
+
+    def test_openai_uses_low_reasoning_effort(self):
+        module = self.fake_openai()
+        with mock.patch.dict(sys.modules, {"openai": module}), self.assertLogs("summarize", "INFO") as logs:
+            summarize._summarize_openai(self.result, "gpt-5.4-mini", "o-key")
+        kwargs = module.OpenAI.return_value.responses.create.call_args.kwargs
+        self.assertEqual(kwargs["reasoning"], {"effort": "low"})
+        self.assertLessEqual(kwargs["max_output_tokens"], 4000)
+        self.assertTrue(any("usage:" in line for line in logs.output))
+
+    def test_openai_retries_without_reasoning_when_rejected(self):
+        module = self.fake_openai()
+        bad = type("BadRequestError", (Exception,), {})
+        module.BadRequestError = bad
+        create = module.OpenAI.return_value.responses.create
+        ok = create.return_value
+        create.side_effect = [bad("Unsupported parameter: reasoning"), ok]
+        with mock.patch.dict(sys.modules, {"openai": module}):
+            summarize._summarize_openai(self.result, "gpt-4.1", "o-key")
+        self.assertEqual(create.call_count, 2)
+        self.assertNotIn("reasoning", create.call_args.kwargs)
 
     def test_openai_incomplete_or_bad_json(self):
         for module in (self.fake_openai(status="incomplete", reason="max_output_tokens"),
