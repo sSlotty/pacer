@@ -264,6 +264,8 @@ list ของ `{level: "red"|"yellow"|"info", message: <ภาษาไทย>}
 **Claude**:
 
 - ใช้ `anthropic.Anthropic().messages.create(model=CLAUDE_MODEL, max_tokens=2000, system=..., messages=[...], output_config={"format": {"type": "json_schema", ...}})` ส่งผล `analyze()` เป็น JSON (`ensure_ascii=False`)
+- **System prompt เขียนเป็นภาษาอังกฤษ แต่สั่งให้ตอบเป็นภาษาไทย** เพราะภาษาไทยกิน token มากกว่า 2–4 เท่า (วัดจริง: prompt ไทยใช้ input ~3,868 token, อังกฤษ ~1,841 token ต่อครั้ง)
+- **ย่อ payload ก่อนส่ง** ด้วย `_compact()`: ตัด field ที่ซ้ำหรือไม่ได้ใช้ (`prev_week_km`, `avg_pace_s_per_km`, `days_of_data`, ชื่อ/วันที่ของ long run ฯลฯ), ตัด key ที่เป็น None, ย่อ `trend_7d` เป็นตาราง CSV บรรทัดเดียวต่อวัน และ dump แบบไม่มีช่องว่าง (ลดขนาดลง ~47%)
   - ค่าใช้จ่ายเกือบทั้งหมดคือ **โทเคนขาออกภาษาไทย** (ภาษาไทยกิน token มากกว่าอังกฤษ 2–4 เท่าต่อตัวอักษร) จึงคุมความยาวแต่ละหัวข้อใน prompt และตั้ง max_tokens ไว้ที่ 2000
   - ทุกครั้งที่เรียกสำเร็จ ให้ log จำนวนโทเคนจาก `response.usage` (input / output / reasoning) เพื่อตรวจสอบกับ dashboard ของผู้ให้บริการได้
 - ส่ง `thinking={"type": "disabled"}` (โมเดลรุ่นใหม่เปิด thinking เป็นค่าเริ่มต้น) ถ้าโมเดลตอบ 400 ที่เกี่ยวกับ thinking ให้ส่งซ้ำโดยไม่ใส่ `thinking`
