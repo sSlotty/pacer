@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 DAILY_COLUMNS = {
@@ -48,6 +49,14 @@ RUN_COLUMNS = {
 }
 
 
+NOTIFICATION_COLUMNS = {
+    "date": "TEXT PRIMARY KEY",
+    "sent_at": "TEXT",
+    "source": "TEXT",
+    "status": "TEXT",
+}
+
+
 class Storage:
     def __init__(self, path: str):
         if path != ":memory:":
@@ -56,6 +65,7 @@ class Storage:
         self.conn.row_factory = sqlite3.Row
         self._create("daily_metrics", DAILY_COLUMNS)
         self._create("runs", RUN_COLUMNS)
+        self._create("notifications", NOTIFICATION_COLUMNS)
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_date ON runs(date)")
         self.conn.commit()
 
@@ -105,6 +115,20 @@ class Storage:
             "SELECT * FROM runs WHERE date >= ? ORDER BY date, start_time", (since,)
         )
         return [dict(r) for r in cur]
+
+    def was_sent(self, day: str) -> bool:
+        """True if a summary for this date was already posted to Discord."""
+        row = self.conn.execute("SELECT 1 FROM notifications WHERE date = ?", (day,)).fetchone()
+        return row is not None
+
+    def mark_sent(self, day: str, source: str | None, status: str | None) -> None:
+        self.conn.execute(
+            "INSERT INTO notifications (date, sent_at, source, status) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(date) DO UPDATE SET sent_at = excluded.sent_at, "
+            "source = excluded.source, status = excluded.status",
+            (day, datetime.now(timezone.utc).isoformat(timespec="seconds"), source or "fallback", status),
+        )
+        self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()

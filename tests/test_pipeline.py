@@ -1,5 +1,7 @@
 """Offline tests for fetching, storage, Discord embeds, fallback text and main() (CLAUDE.md §14)."""
 
+import contextlib
+import datetime
 import json
 import os
 import sys
@@ -40,12 +42,26 @@ def activity(aid, type_key, distance=10000.0, elev=100.0, start="2026-09-19 06:0
     }
 
 
+class FakeDatetime:
+    """Freezes main.datetime.now() at a given local time (other attributes pass through)."""
+
+    def __init__(self, text):
+        self.moment = datetime.datetime.strptime(text, "%Y-%m-%d %H:%M")
+
+    def now(self, tz=None):
+        return self.moment.replace(tzinfo=tz)
+
+    def __getattr__(self, name):
+        return getattr(datetime.datetime, name)
+
+
 class FakeApi:
     """Mimics the garminconnect.Garmin methods we call."""
 
-    def __init__(self, activities=None, broken=()):
+    def __init__(self, activities=None, broken=(), missing_recovery=()):
         self.activities = activities or []
         self.broken = set(broken)
+        self.missing_recovery = set(missing_recovery)
         self.calls = 0
 
     def _maybe_fail(self, name):
@@ -64,17 +80,23 @@ class FakeApi:
 
     def get_sleep_data(self, d):
         self._maybe_fail("sleep")
+        if d in self.missing_recovery:
+            return None
         return {"dailySleepDTO": {"sleepTimeSeconds": 27000, "deepSleepSeconds": 5400,
                                   "remSleepSeconds": 6000, "awakeSleepSeconds": 900,
                                   "sleepScores": {"overall": {"value": 84}}}}
 
     def get_hrv_data(self, d):
         self._maybe_fail("hrv")
+        if d in self.missing_recovery:
+            return None
         return {"hrvSummary": {"lastNightAvg": 62, "weeklyAvg": 60, "status": "BALANCED",
                                "baseline": {"balancedLow": 52, "balancedUpper": 70}}}
 
     def get_training_readiness(self, d):
         self._maybe_fail("readiness")
+        if d in self.missing_recovery:
+            return []
         return [{"score": 77, "level": "HIGH"}]
 
     def get_max_metrics(self, d):
@@ -484,11 +506,12 @@ class MainTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_main(self, argv, login=None, summary=None):
+    def run_main(self, argv, login=None, summary=None, now=None):
         login = login or mock.Mock(return_value=self.api)
         summary = summary or mock.Mock(return_value=(sections(), "Claude"))
+        clock = mock.patch.object(main, "datetime", FakeDatetime(now)) if now else contextlib.nullcontext()
         with mock.patch.dict(os.environ, self.env), \
-                mock.patch("config.load_dotenv"), \
+                mock.patch("config.load_dotenv"), clock, \
                 mock.patch.object(garmin_fetch, "login", login), \
                 mock.patch.object(summarize, "summarize", summary), \
                 mock.patch.object(discord_notify, "send_summary") as send, \
@@ -507,10 +530,60 @@ class MainTests(unittest.TestCase):
         self.assertEqual(len(db.daily_since("2000-01-01")), 42)  # BACKFILL_DAYS
         self.assertEqual({r["type_key"] for r in db.runs_since("2000-01-01")}, {"running"})
         db.close()
-        # second run: DB not empty → REFRESH_DAYS
+        # second run: DB not empty → REFRESH_DAYS (--force skips the once-a-day gate)
         calls_before = self.api.calls
-        self.run_main(["--date", "2026-09-20"])
+        self.run_main(["--date", "2026-09-20", "--force"])
         self.assertEqual(self.api.calls - calls_before, 3 * 5 + 1)
+
+    def test_sends_once_per_day(self):
+        code, send, _, _ = self.run_main(["--date", "2026-09-20"])
+        self.assertEqual((code, send.call_count), (0, 1))
+        calls_before = self.api.calls
+        code, send, _, logs = self.run_main(["--date", "2026-09-20"])
+        self.assertEqual(code, 0)
+        send.assert_not_called()
+        self.assertEqual(self.api.calls, calls_before)  # no Garmin traffic either
+        self.assertTrue(any("already sent" in line for line in logs.output))
+
+    def test_waits_until_recovery_data_is_synced(self):
+        self.run_main(["--date", "2026-09-20"])  # populate the DB (first run backfills)
+        self.api.missing_recovery = {"2026-09-21"}
+        # 05:00 local, before the 06:45 deadline → poll today only, do not send
+        calls_before = self.api.calls
+        code, send, _, logs = self.run_main([], now="2026-09-21 05:00")
+        self.assertEqual(code, 0)
+        send.assert_not_called()
+        self.assertEqual(self.api.calls - calls_before, 5)  # one fetch_day, no activities call
+        self.assertTrue(any("not synced" in line for line in logs.output))
+
+        # 06:50 local, past the deadline → send with what is there
+        code, send, _, logs = self.run_main([], now="2026-09-21 06:50")
+        self.assertEqual(code, 0)
+        send.assert_called_once()
+        self.assertTrue(any("sending anyway" in line for line in logs.output))
+
+    def test_sends_as_soon_as_data_arrives(self):
+        self.run_main(["--date", "2026-09-20"])  # populate the DB
+        code, send, _, _ = self.run_main([], now="2026-09-21 05:30")
+        self.assertEqual(code, 0)
+        send.assert_called_once()
+
+    def test_force_sends_even_when_already_sent(self):
+        self.run_main(["--date", "2026-09-20"])
+        code, send, _, _ = self.run_main(["--date", "2026-09-20", "--force"])
+        self.assertEqual(code, 0)
+        send.assert_called_once()
+
+    def test_marks_sent_only_after_discord_succeeds(self):
+        with mock.patch.dict(os.environ, self.env), mock.patch("config.load_dotenv"), \
+                mock.patch.object(garmin_fetch, "login", return_value=self.api), \
+                mock.patch.object(summarize, "summarize", return_value=(sections(), "Claude")), \
+                mock.patch.object(discord_notify, "send_summary", side_effect=RuntimeError("boom")), \
+                self.assertLogs("garmin-daily", "INFO"):
+            self.assertEqual(main.main(["--date", "2026-09-20"]), 1)
+        db = Storage(self.env["DB_PATH"])
+        self.assertFalse(db.was_sent("2026-09-20"))
+        db.close()
 
     def test_claude_failure_uses_fallback(self):
         boom = mock.Mock(side_effect=RuntimeError("API down"))

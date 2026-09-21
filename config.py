@@ -152,6 +152,7 @@ class Config:
     races: list[dict] = field(default_factory=list)
     trail_elev_threshold: float = 20.0
     tz_name: str = "Asia/Bangkok"
+    send_deadline: str = "06:45"
     db_path: str = "data/garmin.db"
     backfill_days: int = 42
     refresh_days: int = 3
@@ -190,6 +191,7 @@ def load_config() -> Config:
         races=parse_races(os.getenv("RACES")),
         trail_elev_threshold=_env_float("TRAIL_ELEV_THRESHOLD", 20.0),
         tz_name=os.getenv("TZ_NAME") or "Asia/Bangkok",
+        send_deadline=os.getenv("SEND_DEADLINE") or "06:45",
         db_path=os.getenv("DB_PATH") or "data/garmin.db",
         backfill_days=_env_int("BACKFILL_DAYS", 42),
         refresh_days=_env_int("REFRESH_DAYS", 7),

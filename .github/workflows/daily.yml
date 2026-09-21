@@ -2,7 +2,11 @@ name: Garmin daily running coach
 
 on:
   schedule:
-    - cron: "0 1 * * *" # 08:00 Asia/Bangkok
+    # 05:00–06:45 Asia/Bangkok. GitHub delays scheduled runs (often by hours), so the
+    # job runs several times and main.py posts once, as soon as Garmin has synced
+    # last night's sleep/HRV — and by SEND_DEADLINE at the latest (CLAUDE.md §11.1).
+    - cron: "0,30 22-23 * * *"
+    - cron: "45 23 * * *"
   workflow_dispatch:
 
 permissions:
@@ -36,7 +40,8 @@ jobs:
           CLAUDE_MODEL: ${{ vars.CLAUDE_MODEL }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
           TRAIL_ELEV_THRESHOLD: ${{ vars.TRAIL_ELEV_THRESHOLD }}
-        run: python main.py
+          SEND_DEADLINE: ${{ vars.SEND_DEADLINE }}
+        run: python main.py ${{ github.event_name == 'workflow_dispatch' && '--force' || '' }}
 
       - name: Commit database
         if: always()

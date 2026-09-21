@@ -21,7 +21,7 @@
 - **ห้าม commit credential ใด ๆ** (รหัสผ่าน Garmin, token, API key, webhook URL) ทุกอย่างต้องมาจาก environment variable / GitHub Secrets เท่านั้น เพิ่ม `garmin_tokens.b64`, `.env`, `~/.garminconnect` ใน `.gitignore`
 - **repo ต้องเป็น private** เพราะมีการ commit ไฟล์ฐานข้อมูลสุขภาพ (`data/garmin.db`) ถ้าตรวจพบว่า repo เป็น public ให้หยุดและแจ้งเจ้าของ
 - **ห้ามเก็บรหัสผ่าน Garmin ใน CI** ใช้ token แบบ base64 (`GARMINTOKENS_BASE64`) ที่สร้างจากเครื่องเจ้าของเท่านั้น
-- **ห้ามเรียก Garmin ถี่** รันวันละครั้ง, ใส่ `time.sleep(0.3–0.5)` ระหว่าง request, ห้ามเกิน ~250 request ต่อรอบ
+- **ห้ามเรียก Garmin ถี่** รันได้ไม่เกินวันละ ~6 รอบ (ดูหัวข้อ 11.1) แต่ละรอบดึงไม่กี่วัน, ใส่ `time.sleep(0.3–0.5)` ระหว่าง request, ห้ามเกิน ~250 request ต่อรอบ และรวมทั้งวันไม่ควรเกิน ~150 request ดังนั้น `REFRESH_DAYS` ต้องน้อย (ค่าเริ่มต้น 3)
 - **การ fetch ต้องทนความล้มเหลว**: endpoint ใดพังให้ log warning แล้วใช้ `None` ห้ามให้ทั้งระบบล่ม
 - **LLM ห้ามแต่งตัวเลข**: ทุกตัวเลขในข้อความสรุปต้องมาจาก JSON ที่ส่งไปเท่านั้น
 - **ถ้า LLM ทุกเจ้าล้มเหลว ต้องยังส่ง Discord ได้** ด้วยข้อความสรุปแบบ rule-based (fallback)
@@ -66,6 +66,7 @@ garmin-daily/
 | `RACES` | ไม่ | `[]` | JSON list ของรายการแข่ง (ดูหัวข้อ 4.1) เก็บใน Variables ถ้าว่างให้ข้ามส่วน race |
 | `TRAIL_ELEV_THRESHOLD` | ไม่ | `20` | m/km สำหรับจัดประเภท ultra_run (ดูหัวข้อ 8) |
 | `TZ_NAME` | ไม่ | `Asia/Bangkok` | ใช้กำหนด "วันนี้" |
+| `SEND_DEADLINE` | ไม่ | `06:45` | เวลาท้องถิ่นที่ต้องส่งให้ได้ แม้ข้อมูลการนอนยังไม่เข้า (ดูหัวข้อ 11.1) |
 | `DB_PATH` | ไม่ | `data/garmin.db` | |
 | `BACKFILL_DAYS` | ไม่ | `42` | ใช้เมื่อ DB ว่าง |
 | `REFRESH_DAYS` | ไม่ | `3` | ดึงซ้ำย้อนหลังเผื่อ sync ช้า |
@@ -152,7 +153,7 @@ map เป็น: `activity_id` (`activityId`), `date` (10 ตัวแรกข
 
 ## 7. Storage (storage.py)
 
-SQLite สองตาราง: `daily_metrics` (PK `date`) และ `runs` (PK `activity_id`) คอลัมน์ตาม field ในหัวข้อ 6
+SQLite สามตาราง: `daily_metrics` (PK `date`), `runs` (PK `activity_id`) คอลัมน์ตาม field ในหัวข้อ 6 และ `notifications` (PK `date`, คอลัมน์ `sent_at`, `source`, `status`) สำหรับกันส่งซ้ำตามหัวข้อ 11.1 พร้อมเมธอด `was_sent(date)` และ `mark_sent(date, source, status)`
 
 Upsert ด้วย `INSERT ... ON CONFLICT DO UPDATE SET col = COALESCE(excluded.col, col)` เพื่อไม่ให้ค่า `None` จากการดึงรอบหลังทับค่าที่มีอยู่ มีเมธอด `is_empty()`, `daily_since(date)`, `runs_since(date)` คืนค่าเป็น list ของ dict
 
@@ -314,7 +315,7 @@ list ของ `{level: "red"|"yellow"|"info", message: <ภาษาไทย>}
 
 ## 11. Orchestrator (main.py)
 
-CLI: `python main.py [--dry-run] [--backfill N] [--date YYYY-MM-DD]`
+CLI: `python main.py [--dry-run] [--backfill N] [--date YYYY-MM-DD] [--force]`
 
 1. `today` = `--date` หรือวันนี้ตาม `TZ_NAME`
 2. เปิด DB, login Garmin
@@ -323,12 +324,24 @@ CLI: `python main.py [--dry-run] [--backfill N] [--date YYYY-MM-DD]`
    - ถ้า login ล้มเหลวด้วยเหตุอื่นที่ไม่ใช่ auth (เช่น เน็ต) ให้ log error แล้ววิเคราะห์จากข้อมูลที่มีใน DB และส่งสรุปตามปกติ
 5. อ่านข้อมูล 42 วันจาก DB → `analyze()`
 6. `summarize()` ถ้าล้มเหลวใช้ `fallback_sections()` และ log error
-7. `--dry-run` ให้ print JSON และข้อความ ไม่ส่ง Discord, ไม่เช่นนั้นส่ง Discord
+7. `--dry-run` ให้ print JSON และข้อความ ไม่ส่ง Discord, ไม่เช่นนั้นตรวจเงื่อนไขในหัวข้อ 11.1 แล้วส่ง Discord และบันทึกว่าส่งแล้ว
+
+### 11.1 ส่งวันละครั้ง เมื่อข้อมูลพร้อม
+
+เจ้าของออกวิ่งตอน 07:00 และ cron ของ GitHub เลื่อนเวลาได้หลายชั่วโมง จึงตั้ง workflow ให้รันหลายรอบในช่วงเช้าแล้วให้ `main.py` ตัดสินใจเองว่ารอบไหนควรส่ง:
+
+1. ถ้าวันนี้ส่งไปแล้ว (ตาราง `notifications`) → จบทันที exit 0 ไม่ส่งซ้ำ ไม่ต้องเรียก Garmin
+2. ดึงข้อมูล **เฉพาะวันนี้ 1 วัน** ก่อน (ประหยัด request เพราะรอบส่วนใหญ่เป็นแค่การมาเช็ก) ถ้ายังไม่มีข้อมูลการฟื้นตัวของวันนี้ (`sleep_seconds`, `hrv_last_night` และ `readiness_score` เป็น None ทั้งหมด) และเวลาท้องถิ่นยังไม่ถึง `SEND_DEADLINE` → ยังไม่ส่ง รอรอบถัดไป exit 0
+3. ถ้าจะส่ง ให้ดึงเต็มช่วง `REFRESH_DAYS` (พร้อมกิจกรรมวิ่ง) แล้ววิเคราะห์ ส่ง Discord และบันทึกลง `notifications`
+4. ถ้า login Garmin ไม่ได้ ให้ใช้ข้อมูลใน DB ตัดสินตามเงื่อนไขข้อ 2 เหมือนกัน
+
+`--force` ข้ามเงื่อนไขทั้งหมด (ใช้กับ `workflow_dispatch` และการทดสอบ) ส่วน `--date` ที่ระบุเองถือว่าเป็นการสั่งด้วยมือ ให้ข้ามเงื่อนไขข้อ 2 แต่ยังกันส่งซ้ำ
 8. ใช้ `logging` ระดับ INFO, ห้าม log token หรือ webhook URL
 
 ## 12. GitHub Actions (.github/workflows/daily.yml)
 
-- trigger: `schedule: cron "0 1 * * *"` (08:00 เวลาไทย เผื่อเวลา sync ข้อมูลการนอน) และ `workflow_dispatch`
+- trigger: `schedule: cron "0,30 22-23 * * *"` และ `"45 23 * * *"` (05:00–06:45 เวลาไทย รวม 5 รอบ) และ `workflow_dispatch` (ใส่ `--force`)
+  - cron ของ GitHub เลื่อนได้หลายชั่วโมง การรันหลายรอบ + เงื่อนไขในหัวข้อ 11.1 ทำให้ข้อความถึงเร็วที่สุดที่ข้อมูลพร้อม และส่งอย่างช้าที่สุดตอน `SEND_DEADLINE`
 - `permissions: contents: write`, `concurrency: garmin-daily`
 - ขั้นตอน: `actions/checkout@v7` → `actions/setup-python@v7` (3.12, cache pip) — ใช้ major เวอร์ชันที่รันบน Node 24 เพื่อไม่ให้เจอ deprecation warning → `pip install -r requirements.txt` → `python main.py` → commit `data/garmin.db` กลับ repo ด้วยชื่อ `github-actions[bot]` เฉพาะเมื่อมีการเปลี่ยนแปลง (`git diff --cached --quiet || git commit`)
 - secrets: `GARMINTOKENS_BASE64`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (ถ้าใช้), `DISCORD_WEBHOOK_URL`

@@ -115,12 +115,23 @@ python main.py   # ต้องใส่ DISCORD_WEBHOOK_URL ใน .env แล�
 | `CLAUDE_MODEL` | ค่าเริ่มต้น `claude-sonnet-5` |
 | `OPENAI_MODEL` | ค่าเริ่มต้น `gpt-5.4-mini` |
 | `TRAIL_ELEV_THRESHOLD` | ค่าเริ่มต้น `20` (m/km) |
+| `SEND_DEADLINE` | ค่าเริ่มต้น `06:45` เวลาไทย |
 
 แล้วไปที่ **Settings → Actions → General → Workflow permissions** เลือก **Read and write permissions** เพื่อให้ workflow commit ฐานข้อมูลกลับได้
 
 ### 5. ทดสอบ workflow
 
-ไปที่แท็บ **Actions → Garmin daily running coach → Run workflow** ถ้าผ่าน จะมีข้อความใน Discord และ commit `chore: update garmin.db` ใน repo หลังจากนั้นระบบจะรันเองทุกวันเวลา 08:00
+ไปที่แท็บ **Actions → Garmin daily running coach → Run workflow** ถ้าผ่าน จะมีข้อความใน Discord และ commit `chore: update garmin.db` ใน repo (การกดรันเองจะใส่ `--force` ให้อัตโนมัติ จึงส่งเสมอแม้วันนั้นส่งไปแล้ว)
+
+### เวลาส่งข้อความ
+
+cron ของ GitHub ไม่รับประกันเวลา งานที่ตั้งไว้อาจถูกเลื่อนไปหลายชั่วโมง ระบบจึงตั้งให้รันหลายรอบช่วง **05:00–06:45 (เวลาไทย)** แล้วให้โปรแกรมตัดสินใจเองว่ารอบไหนควรส่ง
+
+1. ถ้าวันนั้นส่งไปแล้ว จบทันที ไม่ส่งซ้ำและไม่เรียก Garmin
+2. ถ้าข้อมูลการนอน/HRV ของคืนนั้นยังไม่ซิงก์เข้า Garmin (นาฬิกามักซิงก์ตอนคุณตื่น) จะรอรอบถัดไป รอบที่มาเช็กแบบนี้ดึงข้อมูลแค่วันเดียว
+3. ถ้าข้อมูลมาแล้ว หรือถึงเวลา `SEND_DEADLINE` (ค่าเริ่มต้น 06:45) จะส่งทันทีด้วยข้อมูลเท่าที่มี
+
+ผลคือข้อความจะถึงเร็วที่สุดเท่าที่ข้อมูลพร้อม และอย่างช้าที่สุดคือก่อน 07:00 ถ้าคุณเปลี่ยนเวลาออกวิ่ง ให้แก้ `SEND_DEADLINE` และช่วงเวลา cron ใน `.github/workflows/daily.yml` (cron ใช้เวลา UTC = เวลาไทย − 7 ชั่วโมง)
 
 ## รายการแข่ง (`RACES`)
 
@@ -152,6 +163,7 @@ python main.py                    # รันปกติ ส่ง Discord
 python main.py --dry-run          # พิมพ์ผล ไม่ส่ง Discord
 python main.py --backfill 30      # ดึงย้อนหลัง 30 วัน
 python main.py --date 2026-09-01  # วิเคราะห์เสมือนวันนั้นเป็นวันนี้
+python main.py --force            # ส่งทันที ข้ามเงื่อนไขส่งวันละครั้ง
 ```
 
 ## Environment variables ทั้งหมด
@@ -169,6 +181,7 @@ python main.py --date 2026-09-01  # วิเคราะห์เสมือ�
 | `RACES` | `[]` | |
 | `TRAIL_ELEV_THRESHOLD` | `20` | m/km ที่ทำให้ `ultra_run` ถูกนับเป็น trail |
 | `TZ_NAME` | `Asia/Bangkok` | |
+| `SEND_DEADLINE` | `06:45` | เวลาท้องถิ่นที่ต้องส่งให้ได้ แม้ข้อมูลการนอนยังไม่เข้า |
 | `DB_PATH` | `data/garmin.db` | |
 | `BACKFILL_DAYS` | `42` | ใช้เมื่อฐานข้อมูลว่าง |
 | `REFRESH_DAYS` | `3` | ดึงซ้ำย้อนหลังเผื่อซิงก์ช้า |
@@ -187,6 +200,7 @@ python -m unittest discover -s tests -t .
 |---|---|
 | Discord แจ้ง "Garmin login ล้มเหลว" | token หมดอายุหรือถูกยกเลิก รัน `python setup_tokens.py` ใหม่ แล้วอัปเดต Secret `GARMINTOKENS_BASE64` |
 | ข้อความใน Discord เขียนว่า "ไม่ได้ใช้ AI" | AI ทุกเจ้าใน `LLM_PROVIDER` ล้มเหลว (key ผิด, เครดิตหมด ฯลฯ) ดู log ใน Actions |
+| ข้อความมาช้ากว่าที่ตั้งไว้ | cron ของ GitHub เลื่อนได้หลายชั่วโมง ระบบจึงรันหลายรอบและส่งทันทีที่ข้อมูลพร้อม ถ้าต้องการตรงเวลาจริง ๆ ต้องย้ายไปรันบนเครื่องตัวเองด้วย `launchd` หรือ cron |
 | ข้อมูลบางค่าเป็น `–` | Garmin ยังไม่ซิงก์หรือนาฬิการุ่นนั้นไม่มีข้อมูล ระบบดึงซ้ำย้อนหลัง 3 วันให้อัตโนมัติ |
 | Garmin endpoint error | `garminconnect` เป็น API ไม่เป็นทางการ ลองอัปเดต `pip install -U garminconnect` ก่อน |
 | workflow push ไม่ได้ | ตรวจว่าเปิด Read and write permissions แล้ว |

@@ -26,6 +26,7 @@ def parse_args(argv=None):
     p.add_argument("--dry-run", action="store_true", help="print JSON and summary; do not post to Discord")
     p.add_argument("--backfill", type=int, metavar="N", help="fetch the last N days")
     p.add_argument("--date", type=date.fromisoformat, metavar="YYYY-MM-DD", help="treat this date as today")
+    p.add_argument("--force", action="store_true", help="send even if already sent today or data is incomplete")
     return p.parse_args(argv)
 
 
@@ -40,6 +41,26 @@ def fetch_and_store(api, db: Storage, today: date, days: int, trail_elev_thresho
     for i in range(days):  # newest first, for the same reason
         day = (today - timedelta(days=i)).isoformat()
         db.upsert_daily(garmin_fetch.fetch_day(api, day))
+
+
+RECOVERY_KEYS = ("sleep_seconds", "hrv_last_night", "readiness_score")
+
+
+def has_recovery_data(daily: list[dict], today: date) -> bool:
+    """True once Garmin has synced any of last night's recovery metrics for `today`."""
+    for row in daily:
+        if str(row.get("date"))[:10] == today.isoformat():
+            return any(row.get(key) is not None for key in RECOVERY_KEYS)
+    return False
+
+
+def past_deadline(now: datetime, deadline: str) -> bool:
+    try:
+        hour, minute = (int(x) for x in deadline.split(":"))
+    except ValueError:
+        log.warning("SEND_DEADLINE=%r is not HH:MM; treating this run as past the deadline", deadline)
+        return True
+    return (now.hour, now.minute) >= (hour, minute)
 
 
 def main(argv=None) -> int:
@@ -69,6 +90,28 @@ def main(argv=None) -> int:
             log.error("Garmin login failed (%s: %s); using data already in DB", type(e).__name__, e)
             api = None
 
+        gated = not (args.dry_run or args.force)
+        if gated and db.was_sent(today.isoformat()):
+            log.info("Summary for %s was already sent; nothing to do", today)
+            return 0
+
+        # A gated run may only be polling for Garmin's overnight sync, so fetch today
+        # alone first and pull the full window only once we know we will post.
+        if api is not None and gated and not args.backfill and not db.is_empty():
+            garmin_fetch.reset_request_budget()
+            db.upsert_daily(garmin_fetch.fetch_day(api, today.isoformat()))
+            if args.date is None and not has_recovery_data(db.daily_since(today.isoformat()), today):
+                now = datetime.now(ZoneInfo(cfg.tz_name))
+                if not past_deadline(now, cfg.send_deadline):
+                    log.info(
+                        "Garmin has not synced last night's recovery data yet (now %s, deadline %s); "
+                        "waiting for a later run",
+                        now.strftime("%H:%M"),
+                        cfg.send_deadline,
+                    )
+                    return 0
+                log.info("Recovery data still missing but past %s; sending anyway", cfg.send_deadline)
+
         if api is not None:
             if args.backfill:
                 days = args.backfill
@@ -79,32 +122,38 @@ def main(argv=None) -> int:
             fetch_and_store(api, db, today, max(days, 1), cfg.trail_elev_threshold)
 
         since = (today - timedelta(days=ANALYSIS_WINDOW_DAYS - 1)).isoformat()
-        result = analysis.analyze(
-            db.daily_since(since), db.runs_since(since), today, cfg.races, cfg.trail_elev_threshold
-        )
+        daily = db.daily_since(since)
+        result = analysis.analyze(daily, db.runs_since(since), today, cfg.races, cfg.trail_elev_threshold)
+
+        # Login failed, so the poll above never ran: decide from what the DB already holds.
+        if gated and api is None and args.date is None and not has_recovery_data(daily, today):
+            if not past_deadline(datetime.now(ZoneInfo(cfg.tz_name)), cfg.send_deadline):
+                log.info("No recovery data for %s and Garmin is unreachable; waiting for a later run", today)
+                return 0
+
+        try:
+            sections, source = summarize.summarize(result, cfg)
+            log.info("Summary written by %s", source)
+        except Exception as e:  # noqa: BLE001 — any LLM failure falls back to rule-based text
+            log.error("LLM summary failed (%s); using fallback text", e)
+            sections, source = summarize.fallback_sections(result), None
+
+        if args.dry_run:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            print("\n" + "=" * 60 + "\n")
+            print(json.dumps(sections, ensure_ascii=False, indent=2))
+            return 0
+
+        try:
+            discord_notify.send_summary(cfg.discord_webhook_url, result, sections, source)
+        except Exception as e:  # noqa: BLE001
+            log.error("Discord send failed: %s", e)
+            return 1
+        db.mark_sent(today.isoformat(), source, result["status"])
+        log.info("Summary sent to Discord (status=%s)", result["status"])
+        return 0
     finally:
         db.close()
-
-    try:
-        sections, source = summarize.summarize(result, cfg)
-        log.info("Summary written by %s", source)
-    except Exception as e:  # noqa: BLE001 — any LLM failure falls back to rule-based text
-        log.error("LLM summary failed (%s); using fallback text", e)
-        sections, source = summarize.fallback_sections(result), None
-
-    if args.dry_run:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        print("\n" + "=" * 60 + "\n")
-        print(json.dumps(sections, ensure_ascii=False, indent=2))
-        return 0
-
-    try:
-        discord_notify.send_summary(cfg.discord_webhook_url, result, sections, source)
-    except Exception as e:  # noqa: BLE001
-        log.error("Discord send failed: %s", e)
-        return 1
-    log.info("Summary sent to Discord (status=%s)", result["status"])
-    return 0
 
 
 if __name__ == "__main__":
