@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Install:  cp scripts/com.pacer.daily.plist ~/Library/LaunchAgents/
+               launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.pacer.daily.plist
+     Change the time by editing StartCalendarInterval, then bootout + bootstrap again. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.pacer.daily</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/oat/Developer/project/pacer/scripts/run_daily.sh</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>6</integer>
+    <key>Minute</key><integer>30</integer>
+  </dict>
+
+  <!-- If the Mac was asleep at 06:30, launchd fires the missed job right after wake. -->
+  <key>RunAtLoad</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/oat/Library/Logs/pacer.launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/oat/Library/Logs/pacer.launchd.log</string>
+</dict>
+</plist>

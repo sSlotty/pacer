@@ -1,12 +1,9 @@
 name: Garmin daily running coach
 
+# No schedule: GitHub delayed scheduled runs by 1.5–5 hours and skipped most of them,
+# which is useless for a 07:00 run. The daily run is driven by launchd on the owner's
+# Mac instead (scripts/com.pacer.daily.plist); this workflow stays for manual runs.
 on:
-  schedule:
-    # 05:00–06:45 Asia/Bangkok. GitHub delays scheduled runs (often by hours), so the
-    # job runs several times and main.py posts once, as soon as Garmin has synced
-    # last night's sleep/HRV — and by SEND_DEADLINE at the latest (CLAUDE.md §11.1).
-    - cron: "0,30 22-23 * * *"
-    - cron: "45 23 * * *"
   workflow_dispatch:
 
 permissions:
