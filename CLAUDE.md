@@ -343,8 +343,10 @@ CLI: `python main.py [--dry-run] [--backfill N] [--date YYYY-MM-DD] [--force]`
 
 ## 12. GitHub Actions (.github/workflows/daily.yml)
 
-- trigger: `schedule: cron "0,30 22-23 * * *"` และ `"45 23 * * *"` (05:00–06:45 เวลาไทย รวม 5 รอบ) และ `workflow_dispatch` (ใส่ `--force`)
-  - cron ของ GitHub เลื่อนได้หลายชั่วโมง การรันหลายรอบ + เงื่อนไขในหัวข้อ 11.1 ทำให้ข้อความถึงเร็วที่สุดที่ข้อมูลพร้อม และส่งอย่างช้าที่สุดตอน `SEND_DEADLINE`
+- trigger: `schedule: cron "0,30 19-23 * * *"` และ `"45 23 * * *"` (02:00–06:45 เวลาไทย รวม 11 รอบ) และ `workflow_dispatch` (ใส่ `--force`)
+  - **cron ของ GitHub ไม่ตรงเวลาและรับประกันไม่ได้** วัดจริง: ตั้ง 08:00 รันจริง 12:53 และอีกวันตั้ง 5 รอบช่วง 05:00–06:45 GitHub ข้าม 3 รอบแรกแล้วรัน 07:39 กับ 08:53
+  - วิธีรับมือคือรันหลายรอบกระจายทั้งเช้า + เงื่อนไขในหัวข้อ 11.1 (ส่งครั้งเดียว รอบแรกที่ข้อมูลพร้อม) ไม่ใช่การตั้งเวลาให้แม่นขึ้น
+  - รอบที่ไม่ได้ส่งใช้เวลา ~1 นาทีและยิง Garmin แค่ 5 request รวมทั้งวันประมาณ 86 request และ ~15 นาทีของโควตา Actions
 - `permissions: contents: write`, `concurrency: garmin-daily`
 - ขั้นตอน: `actions/checkout@v7` → `actions/setup-python@v7` (3.12, cache pip) — ใช้ major เวอร์ชันที่รันบน Node 24 เพื่อไม่ให้เจอ deprecation warning → `pip install -r requirements.txt` → `python main.py` → commit `data/garmin.db` กลับ repo ด้วยชื่อ `github-actions[bot]` เฉพาะเมื่อมีการเปลี่ยนแปลง (`git diff --cached --quiet || git commit`)
 - secrets: `GARMINTOKENS_BASE64`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (ถ้าใช้), `DISCORD_WEBHOOK_URL`
