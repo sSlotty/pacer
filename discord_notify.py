@@ -193,6 +193,8 @@ def _load_fields(load: dict) -> list[dict]:
     acwr = f"**{_num(load.get('acwr'), 2)}** {icon}\n{label}"
     if load.get("load_data_insufficient"):
         acwr += " (ข้อมูล < 21 วัน)"
+    # ACWR means nothing without its definition; spell it out on the card.
+    acwr += "\nโหลด 7 วัน ÷ 28 วัน\nปกติ 0.8–1.3"
     fields = [_field("⚖️ ACWR", acwr), _field("🛋️ วันพัก", f"**{_num(load.get('rest_days_7d'))}** / 7 วัน")]
     if load.get("hard_pct_7d") is not None:
         fields.append(_field("💥 ซ้อมหนัก", f"**{_num(load['hard_pct_7d'])}%**\n{_num(load.get('hard_runs_7d'))} ครั้ง"))
