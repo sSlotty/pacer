@@ -246,10 +246,15 @@ def _weekly_field(totals: dict) -> dict | None:
         return None
     peak = max((w["km"] or 0 for w in weeks), default=0) or 1
     rows = []
-    for w in weeks:
+    for i, w in enumerate(weeks):
         km = w["km"] or 0
-        filled = round(km / peak * 14)
-        rows.append(f"{date.fromisoformat(w['start']):%d/%m}  {'█' * filled}{'░' * (14 - filled)} {km:5.1f}")
+        filled = round(km / peak * 10)
+        start, end = date.fromisoformat(w["start"]), date.fromisoformat(w["end"])
+        # Label the full range: a start-date-only label reads as stale on the last row,
+        # which always ends today.
+        label = f"{start:%d/%m}-{end:%d/%m}"
+        marker = " <- สัปดาห์นี้" if i == len(weeks) - 1 else ""
+        rows.append(f"{label} {'█' * filled}{'░' * (10 - filled)} {km:5.1f}{marker}")
     return _field("📅 ระยะรายสัปดาห์ (km)", "```\n" + "\n".join(rows) + "\n```", inline=False)
 
 

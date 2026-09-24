@@ -281,7 +281,11 @@ class DiscordTests(unittest.TestCase):
         self.assertIn("5:00 /km", f["🛣️ Road"])
         self.assertIn("D+ 400 m · 50 m/km", f["⛰️ Trail"])
         self.assertEqual(f["⚖️ ACWR"], "**1** 🟢\nเหมาะสม\nโหลด 7 วัน ÷ 28 วัน\nปกติ 0.8–1.3")
-        self.assertIn("```", f["📅 ระยะรายสัปดาห์ (km)"])
+        chart = f["📅 ระยะรายสัปดาห์ (km)"]
+        self.assertIn("```", chart)
+        # the last row covers today, so it must be labelled as this week, with a full range
+        self.assertIn("14/09-20/09", chart)
+        self.assertTrue(chart.rstrip("`\n").endswith("สัปดาห์นี้"))
         races = [name for name in f if name.startswith(("🅰️", "🅱️"))]
         self.assertEqual(races, ["🅱️ Bangkok Marathon · อีก 5 วัน", "🅰️ Uthai Trail 2026 " + "x" * 300 + " · อีก 61 วัน"][:1] + races[1:])
         bkk = f["🅱️ Bangkok Marathon · อีก 5 วัน"]
