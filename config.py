@@ -194,5 +194,5 @@ def load_config() -> Config:
         send_deadline=os.getenv("SEND_DEADLINE") or "06:45",
         db_path=os.getenv("DB_PATH") or "data/garmin.db",
         backfill_days=_env_int("BACKFILL_DAYS", 42),
-        refresh_days=_env_int("REFRESH_DAYS", 7),
+        refresh_days=_env_int("REFRESH_DAYS", 3),
     )
