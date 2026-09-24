@@ -2,6 +2,7 @@
 
 import contextlib
 import datetime
+from datetime import date
 import json
 import os
 import sys
@@ -96,7 +97,7 @@ class FakeApi:
     def get_training_readiness(self, d):
         self._maybe_fail("readiness")
         if d in self.missing_recovery:
-            return []
+            return [{"score": 25, "level": "LOW"}]  # Garmin has readiness long before sleep
         return [{"score": 77, "level": "HIGH"}]
 
     def get_max_metrics(self, d):
@@ -564,8 +565,21 @@ class MainTests(unittest.TestCase):
         code, send, _, logs = self.run_main(["--date", "2026-09-20"])
         self.assertEqual(code, 0)
         send.assert_not_called()
-        self.assertEqual(self.api.calls, calls_before)  # no Garmin traffic either
+        # still collects today's data: sleep and runs usually land after the summary
+        self.assertEqual(self.api.calls - calls_before, 6)  # 5 day endpoints + activities
         self.assertTrue(any("already sent" in line for line in logs.output))
+
+    def test_readiness_alone_does_not_count_as_synced(self):
+        """Garmin publishes readiness hours before the night's sleep upload."""
+        self.run_main(["--date", "2026-09-20"])  # populate the DB
+        self.api.missing_recovery = {"2026-09-21"}  # sleep + HRV missing, readiness present
+        code, send, _, logs = self.run_main([], now="2026-09-21 05:07")
+        self.assertEqual(code, 0)
+        send.assert_not_called()
+        self.assertTrue(any("not synced" in line for line in logs.output))
+        self.assertFalse(main.has_recovery_data([{"date": "2026-09-21", "readiness_score": 25}], date(2026, 9, 21)))
+        self.assertTrue(main.has_recovery_data([{"date": "2026-09-21", "sleep_seconds": 100}], date(2026, 9, 21)))
+        self.assertTrue(main.has_recovery_data([{"date": "2026-09-21", "hrv_last_night": 60}], date(2026, 9, 21)))
 
     def test_waits_until_recovery_data_is_synced(self):
         self.run_main(["--date", "2026-09-20"])  # populate the DB (first run backfills)

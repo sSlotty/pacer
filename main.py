@@ -43,11 +43,13 @@ def fetch_and_store(api, db: Storage, today: date, days: int, trail_elev_thresho
         db.upsert_daily(garmin_fetch.fetch_day(api, day))
 
 
-RECOVERY_KEYS = ("sleep_seconds", "hrv_last_night", "readiness_score")
+# Garmin publishes a readiness score hours before the watch uploads the night's sleep,
+# so readiness alone does not mean the data worth waiting for has arrived.
+RECOVERY_KEYS = ("sleep_seconds", "hrv_last_night")
 
 
 def has_recovery_data(daily: list[dict], today: date) -> bool:
-    """True once Garmin has synced any of last night's recovery metrics for `today`."""
+    """True once Garmin has synced last night's sleep or HRV for `today`."""
     for row in daily:
         if str(row.get("date"))[:10] == today.isoformat():
             return any(row.get(key) is not None for key in RECOVERY_KEYS)
@@ -92,7 +94,15 @@ def main(argv=None) -> int:
 
         gated = not (args.dry_run or args.force)
         if gated and db.was_sent(today.isoformat()):
-            log.info("Summary for %s was already sent; nothing to do", today)
+            # Keep collecting: today's sleep and runs usually land after the summary
+            # goes out, and without this they would not reach the DB until tomorrow.
+            log.info("Summary for %s was already sent; refreshing today's data only", today)
+            if api is not None:
+                garmin_fetch.reset_request_budget()
+                db.upsert_daily(garmin_fetch.fetch_day(api, today.isoformat()))
+                db.upsert_runs(
+                    garmin_fetch.fetch_runs(api, today.isoformat(), today.isoformat(), cfg.trail_elev_threshold)
+                )
             return 0
 
         # A gated run may only be polling for Garmin's overnight sync, so fetch today
