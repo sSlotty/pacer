@@ -20,7 +20,8 @@
 ## 2. กฎที่ห้ามละเมิด
 
 - **ห้าม commit credential ใด ๆ** (รหัสผ่าน Garmin, token, API key, webhook URL) ทุกอย่างต้องมาจาก environment variable / GitHub Secrets เท่านั้น เพิ่ม `garmin_tokens.b64`, `.env`, `~/.garminconnect` ใน `.gitignore`
-- **repo ต้องเป็น private** เพราะมีการ commit ไฟล์ฐานข้อมูลสุขภาพ (`data/garmin.db`) ถ้าตรวจพบว่า repo เป็น public ให้หยุดและแจ้งเจ้าของ
+- **repo ต้องเป็น private** เพราะประวัติ git มีไฟล์ฐานข้อมูลสุขภาพเก่า (`data/garmin.db`) ถ้าตรวจพบว่า repo เป็น public ให้หยุดและแจ้งเจ้าของ
+- **ข้อมูลสุขภาพเก็บใน Supabase (Postgres)** ทุกตารางต้องเปิด Row Level Security โดยไม่มี policy เพื่อให้ anon / authenticated key ของ Supabase (PostgREST) อ่านไม่ได้ ระบบเข้าถึงผ่าน connection string (`DATABASE_URL`) ซึ่งเป็น role เจ้าของตารางเท่านั้น และ `DATABASE_URL` เป็น secret ห้าม log
 - **ห้ามเก็บรหัสผ่าน Garmin ใน CI** ใช้ token แบบ base64 (`GARMINTOKENS_BASE64`) ที่สร้างจากเครื่องเจ้าของเท่านั้น
 - **ห้ามเรียก Garmin ถี่** รันได้ไม่เกินวันละ ~6 รอบ (ดูหัวข้อ 11.1) แต่ละรอบดึงไม่กี่วัน, ใส่ `time.sleep(0.3–0.5)` ระหว่าง request, ห้ามเกิน ~250 request ต่อรอบ และรวมทั้งวันไม่ควรเกิน ~150 request ดังนั้น `REFRESH_DAYS` ต้องน้อย (ค่าเริ่มต้น 3)
 - **การ fetch ต้องทนความล้มเหลว**: endpoint ใดพังให้ log warning แล้วใช้ `None` ห้ามให้ทั้งระบบล่ม
@@ -39,7 +40,8 @@ garmin-daily/
 ├── config.py                  # อ่าน env ทั้งหมด
 ├── garmin_fetch.py            # login + ดึงข้อมูล + map field + กรองเฉพาะการวิ่ง
 ├── weather.py                 # พยากรณ์อากาศช่วงเวลาซ้อมจาก Open-Meteo + ประเมินความร้อนชื้น/ฝน/ฝุ่น
-├── storage.py                 # SQLite upsert/query
+├── storage.py                 # upsert/query: Supabase Postgres (DATABASE_URL) หรือ SQLite ถ้าไม่ตั้ง
+├── migrate_to_supabase.py     # คัดลอกข้อมูลจาก SQLite เดิมขึ้น Supabase (รันครั้งเดียว, รันซ้ำได้)
 ├── analysis.py                # คำนวณ metrics และ flags (stdlib only)
 ├── summarize.py               # เรียก LLM (Claude / OpenAI) + fallback
 ├── discord_notify.py          # สร้าง embed + ส่ง webhook
@@ -48,7 +50,7 @@ garmin-daily/
 ├── tests/test_analysis.py     # ทดสอบ analysis + RACES ด้วยข้อมูลจำลอง ไม่ต้องใช้เน็ต
 ├── tests/test_pipeline.py     # ทดสอบ fetch (fake API), storage, embed, fallback, main
 ├── tests/test_weather.py      # ทดสอบ weather.assess + flags สภาพอากาศ (fake response)
-├── data/garmin.db             # สร้างอัตโนมัติ, commit โดย workflow
+├── data/garmin.db             # SQLite สำหรับรันบนเครื่องเมื่อไม่ตั้ง DATABASE_URL (ไม่ commit อีกต่อไป)
 └── .github/workflows/daily.yml
 ```
 
@@ -70,7 +72,8 @@ garmin-daily/
 | `TRAIL_ELEV_THRESHOLD` | ไม่ | `20` | m/km สำหรับจัดประเภท ultra_run (ดูหัวข้อ 8) |
 | `TZ_NAME` | ไม่ | `Asia/Bangkok` | ใช้กำหนด "วันนี้" |
 | `SEND_DEADLINE` | ไม่ | `06:45` | เวลาท้องถิ่นที่ต้องส่งให้ได้ แม้ข้อมูลการนอนยังไม่เข้า (ดูหัวข้อ 11.1) |
-| `DB_PATH` | ไม่ | `data/garmin.db` | |
+| `DATABASE_URL` | ใน CI | – | Postgres connection string ของ Supabase (**Session pooler** พอร์ต 5432 เพราะ GitHub Actions ไม่มี IPv6 และ direct connection ของ Supabase เป็น IPv6 เท่านั้น) เก็บใน Secrets ถ้าไม่ตั้งจะใช้ SQLite ที่ `DB_PATH` |
+| `DB_PATH` | ไม่ | `data/garmin.db` | ใช้เมื่อไม่มี `DATABASE_URL` |
 | `BACKFILL_DAYS` | ไม่ | `42` | ใช้เมื่อ DB ว่าง |
 | `REFRESH_DAYS` | ไม่ | `3` | ดึงซ้ำย้อนหลังเผื่อ sync ช้า |
 | `WEATHER_LAT` / `WEATHER_LON` | ไม่ | – | พิกัดที่ใช้ดูพยากรณ์อากาศ (Variables) ถ้าไม่ตั้ง ใช้จุดเริ่มของการวิ่งกลางแจ้งครั้งล่าสุดใน DB ถ้าไม่มีทั้งคู่ให้ข้ามส่วนอากาศ |
@@ -193,11 +196,13 @@ map เป็น: `activity_id` (`activityId`), `date` (10 ตัวแรกข
 
 ## 7. Storage (storage.py)
 
-SQLite สามตาราง: `daily_metrics` (PK `date`), `runs` (PK `activity_id`) คอลัมน์ตาม field ในหัวข้อ 6 และ `notifications` (PK `date`, คอลัมน์ `sent_at`, `source`, `status`) สำหรับกันส่งซ้ำตามหัวข้อ 11.1 พร้อมเมธอด `was_sent(date)` และ `mark_sent(date, source, status)`
+เลือก backend ด้วย `open_storage(cfg)`: มี `DATABASE_URL` → `PostgresStorage` (Supabase, `psycopg` 3 import ภายในคลาส, `prepare_threshold=None` เพื่อให้ใช้กับ pooler ได้) ไม่เช่นนั้น → `Storage` (SQLite, stdlib) ทั้งสองมีเมธอดเหมือนกันและใช้ SQL ชุดเดียวกัน ต่างกันแค่ placeholder, ชนิดคอลัมน์ (Postgres ใช้ `DOUBLE PRECISION` แทน `REAL` และ `BIGINT` สำหรับ `activity_id` เพราะเกิน int32) และการดูคอลัมน์ที่มีอยู่ วันที่ยังเก็บเป็น `TEXT` `YYYY-MM-DD` ทั้งสอง backend
+
+สามตาราง: `daily_metrics` (PK `date`), `runs` (PK `activity_id`) คอลัมน์ตาม field ในหัวข้อ 6 และ `notifications` (PK `date`, คอลัมน์ `sent_at`, `source`, `status`) สำหรับกันส่งซ้ำตามหัวข้อ 11.1 พร้อมเมธอด `was_sent(date)` และ `mark_sent(date, source, status)`
 
 ตาราง `runs` มีคอลัมน์ `start_lat`, `start_lon` และเมธอด `last_run_location()` คืน `(lat, lon)` ของการวิ่งกลางแจ้งครั้งล่าสุดที่มีพิกัด (ไม่นับลู่วิ่ง) หรือ `None`
 
-Upsert ด้วย `INSERT ... ON CONFLICT DO UPDATE SET col = COALESCE(excluded.col, col)` เพื่อไม่ให้ค่า `None` จากการดึงรอบหลังทับค่าที่มีอยู่ มีเมธอด `is_empty()`, `daily_since(date)`, `runs_since(date)` คืนค่าเป็น list ของ dict
+Upsert ด้วย `INSERT ... ON CONFLICT DO UPDATE SET col = COALESCE(excluded.col, col)` เพื่อไม่ให้ค่า `None` จากการดึงรอบหลังทับค่าที่มีอยู่ มีเมธอด `is_empty()`, `daily_since(date)`, `runs_since(date)` คืนค่าเป็น list ของ dict ตอนเปิด ให้สร้างตาราง/คอลัมน์ที่ขาด (`ADD COLUMN IF NOT EXISTS`) และใน Postgres สั่ง `ENABLE ROW LEVEL SECURITY` ทุกตาราง
 
 ## 8. การวิเคราะห์ (analysis.py)
 
@@ -401,11 +406,11 @@ CLI: `python main.py [--dry-run] [--backfill N] [--date YYYY-MM-DD] [--force]`
   - **cron ของ GitHub ไม่ตรงเวลาและรับประกันไม่ได้** วัดจริง: ตั้ง 08:00 รันจริง 12:53 และอีกวันตั้ง 5 รอบช่วง 05:00–06:45 GitHub ข้าม 3 รอบแรกแล้วรัน 07:39 กับ 08:53
   - วิธีรับมือคือรันหลายรอบกระจายทั้งเช้า + เงื่อนไขในหัวข้อ 11.1 (ส่งครั้งเดียว รอบแรกที่ข้อมูลพร้อม) ไม่ใช่การตั้งเวลาให้แม่นขึ้น
   - รอบที่ไม่ได้ส่งใช้เวลา ~1 นาทีและยิง Garmin แค่ 5 request รวมทั้งวันประมาณ 86 request และ ~15 นาทีของโควตา Actions
-- `permissions: contents: write`, `concurrency: garmin-daily`
-- ขั้นตอน: `actions/checkout@v7` → `actions/setup-python@v7` (3.12, cache pip) — ใช้ major เวอร์ชันที่รันบน Node 24 เพื่อไม่ให้เจอ deprecation warning → `pip install -r requirements.txt` → `python main.py` → commit `data/garmin.db` กลับ repo ด้วยชื่อ `github-actions[bot]` เฉพาะเมื่อมีการเปลี่ยนแปลง (`git diff --cached --quiet || git commit`)
-- secrets: `GARMINTOKENS_BASE64`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (ถ้าใช้), `DISCORD_WEBHOOK_URL`
+- `permissions: contents: read`, `concurrency: garmin-daily`
+- ขั้นตอน: `actions/checkout@v7` → `actions/setup-python@v7` (3.12, cache pip) — ใช้ major เวอร์ชันที่รันบน Node 24 เพื่อไม่ให้เจอ deprecation warning → `pip install -r requirements.txt` → `python main.py` (ข้อมูลเขียนลง Supabase โดยตรง ไม่ commit ไฟล์ DB กลับ repo แล้ว)
+- secrets: `DATABASE_URL`, `GARMINTOKENS_BASE64`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (ถ้าใช้), `DISCORD_WEBHOOK_URL`
 - variables: `RACES` (JSON ตามหัวข้อ 4.1), และไม่บังคับ `LLM_PROVIDER`, `CLAUDE_MODEL`, `OPENAI_MODEL`, `TRAIL_ELEV_THRESHOLD`, `WEATHER_LAT`, `WEATHER_LON`, `RUN_TIME`
-- ขั้น commit DB ใช้ `if: always()` เพื่อเก็บข้อมูลที่ดึงมาแล้วแม้ส่ง Discord ไม่สำเร็จ และ push เฉพาะเมื่อมี commit ใหม่
+- ถ้าไม่มี secret `DATABASE_URL` ให้ขั้นแรกของ job fail ทันที เพราะ SQLite บน runner หายเมื่อจบ job (ข้อมูลจะไม่สะสม)
 
 ## 13. Dependencies
 
@@ -414,6 +419,7 @@ garminconnect>=0.3.16   # 0.3.x ไม่ใช้ garth แล้ว ดูห�
 anthropic>=0.40
 openai>=2.0
 requests>=2.31
+psycopg[binary]>=3.2    # Supabase Postgres
 ```
 
 ## 14. การทดสอบ
@@ -432,6 +438,7 @@ requests>=2.31
 - ทดสอบว่า `fetch_runs` กรองกิจกรรมที่ไม่ใช่การวิ่งทิ้ง (ใช้ fake response)
 - `tests/test_weather.py`: ช่วงเวลาซ้อม, ตาราง heat, ระดับ PM2.5, flags สภาพอากาศ, API ล้มเหลวคืน `None` (ไม่ต่อเน็ต)
 - ทดสอบ embed builder ว่าไม่เกินข้อจำกัดของ Discord
+- storage tests รันกับ SQLite เสมอ และรันกับ Postgres ด้วยเมื่อตั้ง `TEST_DATABASE_URL` (เช่น Postgres ใน Docker) ห้ามชี้ไปที่ Supabase จริง เพราะเทสต์ล้างตาราง
 - ก่อนเปิดใช้ cron ต้องรัน `python main.py --dry-run` บนเครื่องให้ผ่านก่อน
 
 ## 15. Definition of Done
@@ -443,7 +450,7 @@ requests>=2.31
 - [ ] endpoint ใดพังแล้วระบบยังส่งสรุปได้
 - [ ] LLM พังแล้วยังได้ fallback message ใน Discord
 - [ ] ไม่มี secret ใด ๆ อยู่ใน git history
-- [ ] workflow รันผ่านด้วย `workflow_dispatch` และ commit DB กลับได้
+- [ ] workflow รันผ่านด้วย `workflow_dispatch` และข้อมูลเข้า Supabase
 - [ ] tests ผ่านทั้งหมด
 - [ ] README.md ภาษาไทยอธิบายขั้นตอนติดตั้งครบ
 

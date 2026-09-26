@@ -168,6 +168,7 @@ class Config:
     tz_name: str = "Asia/Bangkok"
     send_deadline: str = "06:45"
     db_path: str = "data/garmin.db"
+    database_url: str | None = None
     backfill_days: int = 42
     refresh_days: int = 3
     weather_lat: float | None = None
@@ -210,6 +211,7 @@ def load_config() -> Config:
         tz_name=os.getenv("TZ_NAME") or "Asia/Bangkok",
         send_deadline=os.getenv("SEND_DEADLINE") or "06:45",
         db_path=os.getenv("DB_PATH") or "data/garmin.db",
+        database_url=os.getenv("DATABASE_URL") or None,
         backfill_days=_env_int("BACKFILL_DAYS", 42),
         refresh_days=_env_int("REFRESH_DAYS", 3),
         weather_lat=_env_coord("WEATHER_LAT", 90),

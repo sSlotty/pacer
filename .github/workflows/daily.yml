@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency: garmin-daily
 
@@ -32,6 +32,7 @@ jobs:
 
       - name: Run daily summary
         env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           GARMINTOKENS_BASE64: ${{ secrets.GARMINTOKENS_BASE64 }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -45,17 +46,11 @@ jobs:
           WEATHER_LAT: ${{ vars.WEATHER_LAT }}
           WEATHER_LON: ${{ vars.WEATHER_LON }}
           RUN_TIME: ${{ vars.RUN_TIME }}
-        run: python main.py ${{ github.event_name == 'workflow_dispatch' && '--force' || '' }}
-
-      - name: Commit database
-        if: always()
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if [ -f data/garmin.db ]; then
-            git add data/garmin.db
-            if ! git diff --cached --quiet; then
-              git commit -m "chore: update garmin.db ($(date -u +%F))"
-              git push
-            fi
+          # Without Supabase the SQLite file would vanish with the runner and history would never accumulate.
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::Secret DATABASE_URL is not set (Supabase Session pooler connection string)"
+            exit 1
           fi
+          python main.py ${{ github.event_name == 'workflow_dispatch' && '--force' || '' }}
+

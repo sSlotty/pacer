@@ -7,7 +7,7 @@
 ## ภาพรวม
 
 ```
-Garmin Connect ──► garmin_fetch.py ──► data/garmin.db (SQLite)
+Garmin Connect ──► garmin_fetch.py ──► Supabase Postgres (หรือ SQLite data/garmin.db ถ้ารันบนเครื่องโดยไม่ตั้ง DATABASE_URL)
                                             │
                                             ▼
                      analysis.py (สถิติ road/trail, ACWR, การฟื้นตัว, flags, race phase)
@@ -39,7 +39,8 @@ Garmin Connect ──► garmin_fetch.py ──► data/garmin.db (SQLite)
   - Anthropic ([console.anthropic.com](https://console.anthropic.com)) หรือ
   - OpenAI ([platform.openai.com](https://platform.openai.com)) — สมาชิก ChatGPT Plus ใช้กับ API ไม่ได้
 - Discord webhook (Server Settings → Integrations → Webhooks → New Webhook → Copy Webhook URL)
-- GitHub repository แบบ **private** (ระบบจะ commit ไฟล์ฐานข้อมูลสุขภาพ `data/garmin.db` เข้า repo)
+- โปรเจกต์ [Supabase](https://supabase.com) (แพ็กเกจฟรีพอ) สำหรับเก็บข้อมูลย้อนหลัง
+- GitHub repository แบบ **private** (ประวัติ git มีไฟล์ฐานข้อมูลสุขภาพเก่า `data/garmin.db`)
 
 ## ขั้นตอนติดตั้ง
 
@@ -73,7 +74,20 @@ rm garmin_tokens.b64
 
 > ไฟล์ token อยู่ใน `.gitignore` แล้ว แต่ห้าม commit เด็ดขาด token นี้เข้าถึงบัญชี Garmin ได้
 
-### 3. ทดสอบบนเครื่อง (ต้องผ่านก่อนเปิด cron)
+### 3. ตั้งค่า Supabase
+
+1. สร้างโปรเจกต์ใน Supabase แล้วกด **Connect** ด้านบน → เลือก **Session pooler** → คัดลอก connection string (`postgresql://postgres.<ref>:<password>@aws-...pooler.supabase.com:5432/postgres`) แล้วแทน `[YOUR-PASSWORD]` ด้วยรหัสผ่านฐานข้อมูล
+   - ต้องใช้ **Session pooler** ไม่ใช่ Direct connection เพราะ Direct connection ของ Supabase ใช้ IPv6 อย่างเดียว ซึ่ง GitHub Actions ไม่รองรับ
+2. ใส่ใน `.env` เป็น `DATABASE_URL=...`
+3. ย้ายข้อมูลเก่าจาก `data/garmin.db` ขึ้น Supabase (รันซ้ำได้ ไม่ซ้ำข้อมูล):
+
+```bash
+python migrate_to_supabase.py
+```
+
+ระบบสร้างตารางให้เองและเปิด **Row Level Security** ทุกตาราง ข้อมูลจึงอ่านผ่าน API key สาธารณะของ Supabase (anon key) ไม่ได้ อ่านได้เฉพาะผ่าน connection string เท่านั้น ห้ามเผยแพร่ `DATABASE_URL`
+
+### 4. ทดสอบบนเครื่อง (ต้องผ่านก่อนเปิด cron)
 
 คัดลอกไฟล์ตัวอย่างแล้วใส่ค่าในไฟล์ `.env` (ไฟล์นี้อยู่ใน `.gitignore` ไม่ถูก commit และระบบจะอ่านให้อัตโนมัติ):
 
@@ -94,7 +108,7 @@ python main.py --dry-run
 python main.py   # ต้องใส่ DISCORD_WEBHOOK_URL ใน .env แล้ว
 ```
 
-### 4. ตั้งค่า GitHub
+### 5. ตั้งค่า GitHub
 
 ไปที่ repo → **Settings → Secrets and variables → Actions**
 
@@ -106,6 +120,7 @@ python main.py   # ต้องใส่ DISCORD_WEBHOOK_URL ใน .env แล�
 | `ANTHROPIC_API_KEY` | API key ของ Anthropic (ถ้าใช้ Claude) |
 | `OPENAI_API_KEY` | API key ของ OpenAI (ถ้าใช้ ChatGPT) |
 | `DISCORD_WEBHOOK_URL` | URL ของ Discord webhook |
+| `DATABASE_URL` | connection string ของ Supabase (Session pooler) — ถ้าไม่ใส่ workflow จะ fail |
 
 **Variables** (แท็บ Variables, ไม่บังคับ):
 
@@ -120,11 +135,10 @@ python main.py   # ต้องใส่ DISCORD_WEBHOOK_URL ใน .env แล�
 | `WEATHER_LAT` / `WEATHER_LON` | พิกัดที่ใช้ดูพยากรณ์อากาศ ถ้าไม่ตั้ง ใช้จุดเริ่มของการวิ่งกลางแจ้งครั้งล่าสุด |
 | `RUN_TIME` | เวลาออกวิ่ง ค่าเริ่มต้น `07:00` |
 
-แล้วไปที่ **Settings → Actions → General → Workflow permissions** เลือก **Read and write permissions** เพื่อให้ workflow commit ฐานข้อมูลกลับได้
 
-### 5. ทดสอบ workflow
+### 6. ทดสอบ workflow
 
-ไปที่แท็บ **Actions → Garmin daily running coach → Run workflow** ถ้าผ่าน จะมีข้อความใน Discord และ commit `chore: update garmin.db` ใน repo (การกดรันเองจะใส่ `--force` ให้อัตโนมัติ จึงส่งเสมอแม้วันนั้นส่งไปแล้ว)
+ไปที่แท็บ **Actions → Garmin daily running coach → Run workflow** ถ้าผ่าน จะมีข้อความใน Discord และข้อมูลใหม่ในตารางของ Supabase (การกดรันเองจะใส่ `--force` ให้อัตโนมัติ จึงส่งเสมอแม้วันนั้นส่งไปแล้ว)
 
 ### เวลาส่งข้อความ
 
@@ -197,7 +211,8 @@ python main.py --force            # ส่งทันที ข้ามเง�
 | `TRAIL_ELEV_THRESHOLD` | `20` | m/km ที่ทำให้ `ultra_run` ถูกนับเป็น trail |
 | `TZ_NAME` | `Asia/Bangkok` | |
 | `SEND_DEADLINE` | `06:45` | เวลาท้องถิ่นที่ต้องส่งให้ได้ แม้ข้อมูลการนอนยังไม่เข้า |
-| `DB_PATH` | `data/garmin.db` | |
+| `DATABASE_URL` | – | Supabase Postgres (Session pooler) ถ้าไม่ตั้งจะใช้ SQLite |
+| `DB_PATH` | `data/garmin.db` | ใช้เมื่อไม่มี `DATABASE_URL` |
 | `BACKFILL_DAYS` | `42` | ใช้เมื่อฐานข้อมูลว่าง |
 | `REFRESH_DAYS` | `3` | ดึงซ้ำย้อนหลังเผื่อซิงก์ช้า |
 | `WEATHER_LAT` / `WEATHER_LON` | – | พิกัดพยากรณ์อากาศ (ไม่ตั้ง = จุดเริ่มการวิ่งกลางแจ้งล่าสุด) |
@@ -211,6 +226,14 @@ python main.py --force            # ส่งทันที ข้ามเง�
 python -m unittest discover -s tests -t .
 ```
 
+เทสต์ฝั่ง Postgres จะข้ามไปถ้าไม่ตั้ง `TEST_DATABASE_URL` ใช้ Postgres ชั่วคราวใน Docker (**ห้ามชี้ไป Supabase จริง เพราะเทสต์ลบตาราง**):
+
+```bash
+docker run -d --rm --name pacer-pg-test -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:17-alpine
+TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:55432/postgres python -m unittest discover -s tests -t .
+docker stop pacer-pg-test
+```
+
 ## แก้ปัญหา
 
 | อาการ | วิธีแก้ |
@@ -220,7 +243,8 @@ python -m unittest discover -s tests -t .
 | ข้อความมาช้ากว่าที่ตั้งไว้ | cron ของ GitHub เลื่อนได้หลายชั่วโมง ระบบจึงรันหลายรอบและส่งทันทีที่ข้อมูลพร้อม ถ้าต้องการตรงเวลาจริง ๆ ต้องย้ายไปรันบนเครื่องตัวเองด้วย `launchd` หรือ cron |
 | ข้อมูลบางค่าเป็น `–` | Garmin ยังไม่ซิงก์หรือนาฬิการุ่นนั้นไม่มีข้อมูล ระบบดึงซ้ำย้อนหลัง 3 วันให้อัตโนมัติ |
 | Garmin endpoint error | `garminconnect` เป็น API ไม่เป็นทางการ ลองอัปเดต `pip install -U garminconnect` ก่อน |
-| workflow push ไม่ได้ | ตรวจว่าเปิด Read and write permissions แล้ว |
+| workflow ขึ้น `DATABASE_URL is not set` | เพิ่ม secret `DATABASE_URL` |
+| ต่อ Supabase ไม่ได้ / `Network is unreachable` | ใช้ connection string แบบ **Session pooler** (host `...pooler.supabase.com`) ไม่ใช่ `db.<ref>.supabase.co` |
 | ต้องรัน `setup_tokens.py` ใหม่บ่อยผิดปกติ (เช่น ทุก 1–2 วัน) | ใน CI token ที่ refresh แล้วไม่ถูกบันทึกกลับเข้า Secret ถ้า Garmin ยกเลิก refresh token เก่าหลังหมุนใหม่ จะเกิดอาการนี้ ต้องเพิ่มขั้นตอนอัปเดต Secret อัตโนมัติ |
 
 ## ความปลอดภัย

@@ -233,9 +233,20 @@ class LocationTests(unittest.TestCase):
         self.assertEqual((cfg.weather_lat, cfg.weather_lon), (None, None))
 
 
-class StorageTests(unittest.TestCase):
+class StorageContract:
+    """Behaviour both backends must share; subclasses provide open_db()."""
+
+    def open_db(self):
+        raise NotImplementedError
+
+    def setUp(self):
+        self.db = self.open_db()
+
+    def tearDown(self):
+        self.db.close()
+
     def test_upsert_keeps_existing_values(self):
-        db = Storage(":memory:")
+        db = self.db
         self.assertTrue(db.is_empty())
         db.upsert_daily({"date": "2026-09-20", "resting_hr": 50, "sleep_seconds": 27000})
         db.upsert_daily({"date": "2026-09-20", "resting_hr": None, "sleep_seconds": 28000})
@@ -253,6 +264,113 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(rows[0]["name"], "renamed")
         self.assertEqual(db.runs_since("2026-09-20"), [])
 
+    def test_real_garmin_ids_and_precise_values(self):
+        run = garmin_fetch.map_activity({**activity(21345678901, "running"), "distance": 10012.37,
+                                         "startLatitude": 13.7563, "startLongitude": 100.5018})
+        self.db.upsert_runs([run])
+        row = self.db.runs_since("2026-09-01")[0]
+        self.assertEqual(row["activity_id"], 21345678901)  # beyond int32
+        self.assertEqual(row["distance_m"], 10012.37)  # no float4 rounding
+        self.assertEqual(self.db.last_run_location(), (13.76, 100.5))
+
+    def test_notifications(self):
+        self.assertFalse(self.db.was_sent("2026-09-20"))
+        self.db.mark_sent("2026-09-20", None, "green")
+        self.db.mark_sent("2026-09-20", "Claude", "yellow")
+        self.assertTrue(self.db.was_sent("2026-09-20"))
+        row = self.db._exec("SELECT source, status FROM notifications WHERE date = ?", ("2026-09-20",)).fetchone()
+        self.assertEqual((row["source"], row["status"]), ("Claude", "yellow"))
+
+    def test_reopen_keeps_data(self):
+        self.db.upsert_daily({"date": "2026-09-20", "resting_hr": 50})
+        self.db.close()
+        self.db = self.reopen_db()
+        self.assertEqual(self.db.daily_since("2026-09-01")[0]["resting_hr"], 50)
+
+
+class SqliteStorageTests(StorageContract, unittest.TestCase):
+    def open_db(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        return self.reopen_db()
+
+    def reopen_db(self):
+        return Storage(os.path.join(self.tmp.name, "garmin.db"))
+
+    def test_adds_missing_columns(self):
+        import sqlite3
+
+        path = os.path.join(self.tmp.name, "old.db")
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE runs (activity_id INTEGER PRIMARY KEY, date TEXT NOT NULL)")
+        conn.close()
+        db = Storage(path)
+        self.assertIn("start_lat", db._existing_columns("runs"))
+        db.close()
+
+
+TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
+
+
+@unittest.skipUnless(TEST_DATABASE_URL, "set TEST_DATABASE_URL to a throwaway Postgres to run")
+class PostgresStorageTests(StorageContract, unittest.TestCase):
+    """Drops the tables first — never point TEST_DATABASE_URL at the real Supabase project."""
+
+    def open_db(self):
+        import psycopg
+
+        with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
+            conn.execute("DROP TABLE IF EXISTS daily_metrics, runs, notifications")
+        return self.reopen_db()
+
+    def reopen_db(self):
+        from storage import PostgresStorage
+
+        return PostgresStorage(TEST_DATABASE_URL)
+
+    def test_schema_types_and_row_level_security(self):
+        types = {r["column_name"]: r["data_type"] for r in self.db._exec(
+            "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'runs'")}
+        self.assertEqual(types["activity_id"], "bigint")
+        self.assertEqual(types["distance_m"], "double precision")
+        rls = {r["relname"]: r["relrowsecurity"] for r in self.db._exec(
+            "SELECT relname, relrowsecurity FROM pg_class "
+            "WHERE relname IN ('daily_metrics', 'runs', 'notifications')")}
+        self.assertEqual(rls, {"daily_metrics": True, "runs": True, "notifications": True})
+
+    def test_adds_missing_columns(self):
+        self.db._exec("ALTER TABLE runs DROP COLUMN start_lat")
+        self.db.conn.commit()
+        self.db.close()
+        self.db = self.reopen_db()
+        self.assertIn("start_lat", self.db._existing_columns("runs"))
+
+    def test_migrate_from_sqlite(self):
+        import migrate_to_supabase
+
+        src = Storage(":memory:")
+        src.upsert_daily({"date": "2026-09-20", "resting_hr": 50})
+        src.upsert_runs([garmin_fetch.map_activity(activity(1, "running"))])
+        src.mark_sent("2026-09-20", "Claude", "green")
+        for _ in range(2):  # re-running is harmless
+            counts = migrate_to_supabase.migrate(src, self.db)
+        src.close()
+        self.assertEqual(counts, {"daily_metrics": 1, "runs": 1, "notifications": 1})
+        self.assertEqual(len(self.db.runs_since("2000-01-01")), 1)
+        self.assertTrue(self.db.was_sent("2026-09-20"))
+
+
+class OpenStorageTests(unittest.TestCase):
+    def test_backend_follows_database_url(self):
+        import storage
+
+        self.assertIsInstance(storage.open_storage(fake_cfg(db_path=":memory:")), Storage)
+        with mock.patch.object(storage, "PostgresStorage") as pg:
+            storage.open_storage(fake_cfg(database_url="postgresql://u:p@host:5432/postgres"))
+        pg.assert_called_once_with("postgresql://u:p@host:5432/postgres")
+        self.assertEqual(storage.PostgresStorage._decl(None, "INTEGER PRIMARY KEY"), "BIGINT PRIMARY KEY")
+        self.assertEqual(storage.PostgresStorage._decl(None, "REAL"), "DOUBLE PRECISION")
+        self.assertEqual(storage.PostgresStorage._decl(None, "TEXT NOT NULL"), "TEXT NOT NULL")
 
 def sample_result(races=True):
     daily, runs = calm_dataset()
@@ -564,6 +682,7 @@ class MainTests(unittest.TestCase):
             "REFRESH_DAYS": "3",
             "WEATHER_LAT": "",
             "WEATHER_LON": "",
+            "DATABASE_URL": "",
         }
         self.forecast = mock.Mock(return_value=(None, None))
 

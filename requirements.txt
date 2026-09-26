@@ -2,3 +2,4 @@ garminconnect>=0.3.16
 anthropic>=0.40
 requests>=2.31
 openai>=2.0
+psycopg[binary]>=3.2

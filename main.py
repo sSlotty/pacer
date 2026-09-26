@@ -15,7 +15,7 @@ import garmin_fetch
 import summarize
 import weather
 from config import load_config
-from storage import Storage
+from storage import Storage, open_storage
 
 log = logging.getLogger("garmin-daily")
 
@@ -89,7 +89,8 @@ def main(argv=None) -> int:
         log.error("DISCORD_WEBHOOK_URL is not set (use --dry-run to test without Discord)")
         return 1
 
-    db = Storage(cfg.db_path)
+    db = open_storage(cfg)
+    log.info("Storage: %s", "Supabase Postgres" if cfg.database_url else f"SQLite {cfg.db_path}")
     try:
         try:
             api = garmin_fetch.login(cfg.garmin_tokens_b64, cfg.garmin_tokens_path)
