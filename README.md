@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/logo-b.png" alt="Pacer" width="112" height="112">
+<img src="assets/logo.svg" alt="Pacer" width="112" height="112">
 
 # Pacer
 
@@ -15,6 +15,8 @@
 [![Discord](https://img.shields.io/badge/Notify-Discord-5865F2?logo=discord&logoColor=white)](https://discord.com)
 
 [Features](#features) · [How It Works](#how-it-works) · [Getting Started](#getting-started) · [Configuration](#configuration) · [Troubleshooting](#troubleshooting)
+
+**ภาษาไทย** · [English](README.en.md)
 
 </div>
 

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0F2027"/><stop offset="0.55" stop-color="#113B3A"/><stop offset="1" stop-color="#0B1E2D"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#1ABC9C"/><stop offset="0.6" stop-color="#2ECC71"/><stop offset="1" stop-color="#A3E635"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="182" fill="none" stroke="#FFFFFF" stroke-opacity="0.09" stroke-width="24"/>
+  <circle cx="256" cy="256" r="182" fill="none" stroke="url(#ring)" stroke-width="24"
+          stroke-linecap="round" stroke-dasharray="860 284" transform="rotate(132 256 256)"/>
+  <circle cx="300" cy="150" r="31" fill="#A3E635"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M292 192 L248 272"/>                      <!-- torso, leaning forward -->
+    <path d="M288 206 L340 222 L356 182"/>             <!-- front arm, elbow bent -->
+    <path d="M274 222 L224 244 L210 206"/>             <!-- back arm -->
+    <path d="M248 272 L302 300 L296 366"/>             <!-- front leg driving down -->
+    <path d="M248 272 L196 310 L162 288"/>             <!-- back leg kicking up -->
+  </g>
+  <g stroke="#A3E635" stroke-opacity="0.8" stroke-width="15" stroke-linecap="round">
+    <path d="M128 352 L180 352"/><path d="M148 392 L214 392"/>
+  </g>
+</svg>
