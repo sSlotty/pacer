@@ -16,6 +16,7 @@ import discord_notify  # noqa: E402
 import garmin_fetch  # noqa: E402
 import main  # noqa: E402
 import summarize  # noqa: E402
+import weather  # noqa: E402
 from analysis import analyze  # noqa: E402
 from storage import Storage  # noqa: E402
 from tests.test_analysis import TODAY, calm_dataset  # noqa: E402
@@ -197,6 +198,39 @@ class DotenvTests(unittest.TestCase):
                 self.assertEqual(os.environ["PACER_T2"], "plain")
                 self.assertEqual(os.environ["PACER_T3"], "existing")
             config.load_dotenv(os.path.join(tmp, "missing.env"))
+
+
+class LocationTests(unittest.TestCase):
+    def test_map_activity_rounds_start_coordinates(self):
+        run = garmin_fetch.map_activity({**activity(1, "running"), "startLatitude": 13.756331, "startLongitude": 100.501765})
+        self.assertEqual((run["start_lat"], run["start_lon"]), (13.76, 100.5))
+        run = garmin_fetch.map_activity(activity(2, "treadmill_running"))
+        self.assertEqual((run["start_lat"], run["start_lon"]), (None, None))
+
+    def test_last_run_location_skips_indoor_and_missing_gps(self):
+        db = Storage(":memory:")
+        self.assertIsNone(db.last_run_location())
+        gps = {"startLatitude": 18.79, "startLongitude": 98.98}
+        db.upsert_runs([
+            garmin_fetch.map_activity({**activity(1, "running", start="2026-09-10 06:00:00"), **gps}),
+            garmin_fetch.map_activity({**activity(2, "treadmill_running", start="2026-09-12 06:00:00"),
+                                       "startLatitude": 1.0, "startLongitude": 1.0}),
+            garmin_fetch.map_activity(activity(3, "running", start="2026-09-14 06:00:00")),  # no GPS
+        ])
+        self.assertEqual(db.last_run_location(), (18.79, 98.98))
+        db.close()
+
+    def test_weather_coordinates_from_env(self):
+        import config
+
+        with mock.patch.dict(os.environ, {"WEATHER_LAT": "13.75", "WEATHER_LON": "100.5", "RUN_TIME": "06:00"}), \
+                mock.patch("config.load_dotenv"):
+            cfg = config.load_config()
+        self.assertEqual((cfg.weather_lat, cfg.weather_lon, cfg.run_time), (13.75, 100.5, "06:00"))
+        with mock.patch.dict(os.environ, {"WEATHER_LAT": "north", "WEATHER_LON": "200"}), \
+                mock.patch("config.load_dotenv"), self.assertLogs("config", "WARNING"):
+            cfg = config.load_config()
+        self.assertEqual((cfg.weather_lat, cfg.weather_lon), (None, None))
 
 
 class StorageTests(unittest.TestCase):
@@ -528,7 +562,10 @@ class MainTests(unittest.TestCase):
             "GARMINTOKENS_BASE64": "",
             "BACKFILL_DAYS": "42",
             "REFRESH_DAYS": "3",
+            "WEATHER_LAT": "",
+            "WEATHER_LON": "",
         }
+        self.forecast = mock.Mock(return_value=(None, None))
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -541,6 +578,7 @@ class MainTests(unittest.TestCase):
                 mock.patch("config.load_dotenv"), clock, \
                 mock.patch.object(garmin_fetch, "login", login), \
                 mock.patch.object(summarize, "summarize", summary), \
+                mock.patch.object(weather, "fetch_hourly", self.forecast), \
                 mock.patch.object(discord_notify, "send_summary") as send, \
                 mock.patch.object(discord_notify, "send_auth_alert") as alert, \
                 self.assertLogs("garmin-daily", "INFO") as logs:
@@ -607,6 +645,33 @@ class MainTests(unittest.TestCase):
         code, send, _, _ = self.run_main([], now="2026-09-21 05:30")
         self.assertEqual(code, 0)
         send.assert_called_once()
+
+    def test_weather_from_last_run_location_when_sending(self):
+        self.api.activities[-2] = {**self.api.activities[-2], "startLatitude": 13.7563, "startLongitude": 100.5018}
+        hourly = {"time": [f"2026-09-20T{h:02d}:00" for h in range(24)],
+                  "temperature_2m": [30.0] * 24, "dew_point_2m": [26.0] * 24}
+        self.forecast.return_value = ({"hourly": hourly}, None)
+        code, send, _, _ = self.run_main(["--date", "2026-09-20"])
+        self.assertEqual(code, 0)
+        self.forecast.assert_called_once_with(13.76, 100.5, "2026-09-20", "Asia/Bangkok")
+        result = send.call_args.args[1]
+        self.assertEqual(result["weather"]["heat_level"], "high")
+        self.assertEqual(result["weather"]["location_source"], "last_run")
+
+    def test_weather_location_from_config_wins(self):
+        self.env.update(WEATHER_LAT="18.79", WEATHER_LON="98.98")
+        self.run_main(["--date", "2026-09-20"])
+        self.assertEqual(self.forecast.call_args.args[:2], (18.79, 98.98))
+
+    def test_polling_run_skips_weather(self):
+        self.run_main(["--date", "2026-09-20"])  # populate the DB
+        self.env.update(WEATHER_LAT="13.75", WEATHER_LON="100.5")
+        self.forecast.reset_mock()
+        self.api.missing_recovery = {"2026-09-21"}
+        code, send, _, _ = self.run_main([], now="2026-09-21 05:00")
+        self.assertEqual(code, 0)
+        send.assert_not_called()
+        self.forecast.assert_not_called()
 
     def test_force_sends_even_when_already_sent(self):
         self.run_main(["--date", "2026-09-20"])

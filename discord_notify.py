@@ -158,6 +158,76 @@ def _recovery_fields(rec: dict) -> list[dict]:
     return _row(fields)
 
 
+HEAT_LABEL = {
+    "none": "🟢 สบาย",
+    "mild": "🟢 อุ่น",
+    "moderate": "🟡 ร้อนชื้น",
+    "high": "🟠 ร้อนชื้นมาก",
+    "severe": "🔴 อันตราย ไม่ควรซ้อมหนัก",
+}
+
+
+def _weather_icon(code) -> str:
+    if code is None:
+        return "🌤️"
+    if code >= 95:
+        return "⛈️"
+    if code in (71, 73, 75, 77, 85, 86):
+        return "❄️"
+    if code >= 51:
+        return "🌧️"
+    if code >= 45:
+        return "🌫️"
+    return {0: "☀️", 1: "🌤️", 2: "⛅"}.get(code, "☁️")
+
+
+def _weather_fields(w: dict | None) -> list[dict]:
+    if not w:
+        return []
+    fields = []
+
+    lines = []
+    if w.get("temp_c") is not None:
+        temp = _num(w["temp_c"])
+        if w.get("temp_max_c") is not None and w["temp_max_c"] != w["temp_c"]:
+            temp += f"–{_num(w['temp_max_c'])}"
+        line = f"**{temp}°C**"
+        if w.get("feels_like_max_c") is not None:
+            line += f" · รู้สึก {_num(w['feels_like_max_c'])}°C"
+        lines.append(line)
+    if w.get("condition"):
+        lines.append(w["condition"])
+    if w.get("wind_kmh") is not None:
+        lines.append(f"ลม {_num(w['wind_kmh'])} km/h")
+    if lines:
+        fields.append(_field(f"{_weather_icon(w.get('weather_code'))} อากาศ {w.get('window', '')}".strip(), "\n".join(lines)))
+
+    if w.get("heat_level"):
+        lines = [HEAT_LABEL.get(w["heat_level"], w["heat_level"])]
+        if w.get("pace_slowdown_pct_max"):
+            lines.append(f"pace ช้าลง ~{_num(w['pace_slowdown_pct_min'])}–{_num(w['pace_slowdown_pct_max'])}%")
+        humid = []
+        if w.get("dew_point_c") is not None:
+            humid.append(f"จุดน้ำค้าง {_num(w['dew_point_c'])}°C")
+        if w.get("humidity_pct") is not None:
+            humid.append(f"ชื้น {_num(w['humidity_pct'])}%")
+        if humid:
+            lines.append(" · ".join(humid))
+        fields.append(_field("💦 ร้อนชื้น", "\n".join(lines)))
+
+    lines = []
+    if w.get("rain_chance_pct") is not None:
+        line = f"ฝน **{_num(w['rain_chance_pct'])}%**"
+        if w.get("rain_mm"):
+            line += f" · {_num(w['rain_mm'])} mm"
+        lines.append(line)
+    if w.get("pm25") is not None:
+        lines.append(f"PM2.5 **{_num(w['pm25'])}** · {w.get('pm25_level') or ''}".rstrip(" ·"))
+    if lines:
+        fields.append(_field("🌧️ ฝน · 😷 ฝุ่น", "\n".join(lines)))
+    return _row(fields)
+
+
 def _running_fields(result: dict) -> list[dict]:
     tot = result.get("totals_7d") or {}
     road = result.get("road_7d") or {}
@@ -272,6 +342,7 @@ def embed_length(embed: dict) -> int:
 def build_embed(result: dict, sections: dict, source: str | None = "Claude") -> dict:
     status = result.get("status")
     fields = _recovery_fields(result.get("recovery") or {})
+    fields += _weather_fields(result.get("weather"))
     fields += _running_fields(result)
     fields += _load_fields(result.get("load") or {})
     fields += [_race_field(r, result) for r in (result.get("races") or [])[:3]]
@@ -279,7 +350,8 @@ def build_embed(result: dict, sections: dict, source: str | None = "Claude") -> 
     if weekly:
         fields.append(weekly)
 
-    footer = f"Pacer · ข้อมูลจาก Garmin Connect · {f'สรุปโดย {source}' if source else 'ข้อความอัตโนมัติ (ไม่ได้ใช้ AI)'}"
+    credit = " · อากาศจาก Open-Meteo" if result.get("weather") else ""  # CC BY 4.0 attribution
+    footer = f"Pacer · ข้อมูลจาก Garmin Connect{credit} · {f'สรุปโดย {source}' if source else 'ข้อความอัตโนมัติ (ไม่ได้ใช้ AI)'}"
     embed = {
         "title": _clip(f"🏃 {_thai_date(result['date'], weekday=True)} · {STATUS_BADGE.get(status, '⚪')}", TITLE_LIMIT),
         "description": _clip(_description(result, sections), DESCRIPTION_LIMIT),

@@ -133,6 +133,11 @@ def fetch_day(api, day: str) -> dict:
     }
 
 
+def _coord(value):
+    # ~1 km precision is plenty for a weather forecast and avoids storing exact home GPS.
+    return round(value, 2) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
 def map_activity(act: dict, trail_elev_threshold: float = 20.0) -> dict | None:
     """Map one Garmin activity to a run row, or None if it is not a usable run."""
     type_key = _g(act, "activityType", "typeKey")
@@ -164,6 +169,8 @@ def map_activity(act: dict, trail_elev_threshold: float = 20.0) -> dict | None:
         "training_load": _g(act, "activityTrainingLoad"),
         "aerobic_te": _g(act, "aerobicTrainingEffect"),
         "anaerobic_te": _g(act, "anaerobicTrainingEffect"),
+        "start_lat": _coord(_g(act, "startLatitude")),
+        "start_lon": _coord(_g(act, "startLongitude")),
     }
 
 

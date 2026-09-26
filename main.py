@@ -13,6 +13,7 @@ import analysis
 import discord_notify
 import garmin_fetch
 import summarize
+import weather
 from config import load_config
 from storage import Storage
 
@@ -63,6 +64,18 @@ def past_deadline(now: datetime, deadline: str) -> bool:
         log.warning("SEND_DEADLINE=%r is not HH:MM; treating this run as past the deadline", deadline)
         return True
     return (now.hour, now.minute) >= (hour, minute)
+
+
+def fetch_weather(cfg, db: Storage, today: date) -> dict | None:
+    """Forecast for today's run window at WEATHER_LAT/LON, else where the last outdoor run started."""
+    if cfg.weather_lat is not None and cfg.weather_lon is not None:
+        lat, lon, source = cfg.weather_lat, cfg.weather_lon, "config"
+    elif (loc := db.last_run_location()) is not None:
+        (lat, lon), source = loc, "last_run"
+    else:
+        log.info("No weather location (set WEATHER_LAT/WEATHER_LON); skipping weather")
+        return None
+    return weather.get_weather(lat, lon, today.isoformat(), cfg.tz_name, cfg.run_time, source)
 
 
 def main(argv=None) -> int:
@@ -133,13 +146,18 @@ def main(argv=None) -> int:
 
         since = (today - timedelta(days=ANALYSIS_WINDOW_DAYS - 1)).isoformat()
         daily = db.daily_since(since)
-        result = analysis.analyze(daily, db.runs_since(since), today, cfg.races, cfg.trail_elev_threshold)
 
         # Login failed, so the poll above never ran: decide from what the DB already holds.
         if gated and api is None and args.date is None and not has_recovery_data(daily, today):
             if not past_deadline(datetime.now(ZoneInfo(cfg.tz_name)), cfg.send_deadline):
                 log.info("No recovery data for %s and Garmin is unreachable; waiting for a later run", today)
                 return 0
+
+        # Only runs that will post get this far, so polling runs never call the weather API.
+        forecast = fetch_weather(cfg, db, today)
+        result = analysis.analyze(
+            daily, db.runs_since(since), today, cfg.races, cfg.trail_elev_threshold, weather=forecast
+        )
 
         try:
             sections, source = summarize.summarize(result, cfg)

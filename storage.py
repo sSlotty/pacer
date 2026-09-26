@@ -6,6 +6,8 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from analysis import INDOOR_TYPE_KEYS
+
 DAILY_COLUMNS = {
     "date": "TEXT PRIMARY KEY",
     "resting_hr": "REAL",
@@ -46,6 +48,8 @@ RUN_COLUMNS = {
     "training_load": "REAL",
     "aerobic_te": "REAL",
     "anaerobic_te": "REAL",
+    "start_lat": "REAL",
+    "start_lon": "REAL",
 }
 
 
@@ -115,6 +119,17 @@ class Storage:
             "SELECT * FROM runs WHERE date >= ? ORDER BY date, start_time", (since,)
         )
         return [dict(r) for r in cur]
+
+    def last_run_location(self) -> tuple[float, float] | None:
+        """(lat, lon) where the latest outdoor run with GPS started, or None."""
+        placeholders = ", ".join("?" for _ in INDOOR_TYPE_KEYS)
+        row = self.conn.execute(
+            "SELECT start_lat, start_lon FROM runs "
+            "WHERE start_lat IS NOT NULL AND start_lon IS NOT NULL "
+            f"AND type_key NOT IN ({placeholders}) ORDER BY date DESC, start_time DESC LIMIT 1",
+            INDOOR_TYPE_KEYS,
+        ).fetchone()
+        return (row["start_lat"], row["start_lon"]) if row else None
 
     def was_sent(self, day: str) -> bool:
         """True if a summary for this date was already posted to Discord."""

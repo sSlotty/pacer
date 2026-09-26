@@ -42,6 +42,9 @@ jobs:
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
           TRAIL_ELEV_THRESHOLD: ${{ vars.TRAIL_ELEV_THRESHOLD }}
           SEND_DEADLINE: ${{ vars.SEND_DEADLINE }}
+          WEATHER_LAT: ${{ vars.WEATHER_LAT }}
+          WEATHER_LON: ${{ vars.WEATHER_LON }}
+          RUN_TIME: ${{ vars.RUN_TIME }}
         run: python main.py ${{ github.event_name == 'workflow_dispatch' && '--force' || '' }}
 
       - name: Commit database

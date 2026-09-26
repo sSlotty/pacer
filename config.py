@@ -39,6 +39,20 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_coord(name: str, limit: float) -> float | None:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        value = None
+    if value is None or not -limit <= value <= limit:
+        log.warning("%s=%r is not a valid coordinate; ignoring", name, raw)
+        return None
+    return value
+
+
 def _num(value) -> float | None:
     if isinstance(value, bool):
         return None
@@ -156,6 +170,9 @@ class Config:
     db_path: str = "data/garmin.db"
     backfill_days: int = 42
     refresh_days: int = 3
+    weather_lat: float | None = None
+    weather_lon: float | None = None
+    run_time: str = "07:00"
 
 
 def load_dotenv(path: str = ".env") -> None:
@@ -195,4 +212,7 @@ def load_config() -> Config:
         db_path=os.getenv("DB_PATH") or "data/garmin.db",
         backfill_days=_env_int("BACKFILL_DAYS", 42),
         refresh_days=_env_int("REFRESH_DAYS", 3),
+        weather_lat=_env_coord("WEATHER_LAT", 90),
+        weather_lon=_env_coord("WEATHER_LON", 180),
+        run_time=os.getenv("RUN_TIME") or "07:00",
     )

@@ -433,6 +433,41 @@ def _flags(totals, trail, load, rec, active_races):
     return flags
 
 
+def _weather_flags(weather):
+    """Weather changes how to train, never whether the body needs rest, so no red here (§8.5)."""
+    if not weather:
+        return []
+    flags = []
+    window = weather.get("window") or "ช่วงซ้อม"
+    heat_level = weather.get("heat_level")
+    if heat_level in ("high", "severe"):
+        temp, dew = weather.get("temp_max_c"), weather.get("dew_point_c")
+        if heat_level == "severe":
+            advice = "เลี่ยงซ้อมหนัก วิ่งเบา ๆ หรือย้ายเข้าในร่ม"
+        else:
+            advice = (
+                f"pace จะช้าลงราว {weather['pace_slowdown_pct_min']:g}–{weather['pace_slowdown_pct_max']:g}% "
+                "ลดความหนักและดื่มน้ำให้พอ"
+            )
+        flags.append(
+            {"level": "yellow", "message": f"ร้อนชื้นมากช่วง {window} ({temp:g}°C จุดน้ำค้าง {dew:g}°C) {advice}"}
+        )
+    if weather.get("thunderstorm"):
+        flags.append(
+            {"level": "yellow", "message": f"ช่วง {window} มีพายุฝนฟ้าคะนอง ระวังฟ้าผ่า เลี่ยงที่โล่งและสันเขา"}
+        )
+    pm25 = weather.get("pm25")
+    if pm25 is not None and pm25 > 75:
+        flags.append({"level": "yellow", "message": f"PM2.5 {pm25:g} µg/m³ มีผลต่อสุขภาพ ควรวิ่งในร่มหรือบนลู่"})
+    elif pm25 is not None and pm25 > 37.5:
+        flags.append({"level": "info", "message": f"PM2.5 {pm25:g} µg/m³ เริ่มมีผลต่อสุขภาพ ลดความหนักลง"})
+    if (weather.get("rain_mm") or 0) >= 10:
+        flags.append({"level": "info", "message": f"ฝนหนักช่วง {window} ทางลื่น โดยเฉพาะเทรล"})
+    if (weather.get("gust_kmh") or 0) >= 50:
+        flags.append({"level": "info", "message": f"ลมกระโชกแรง {weather['gust_kmh']:g} km/h"})
+    return flags
+
+
 def _trend(daily_by_date, runs, today: date):
     out = []
     for i in range(6, -1, -1):
@@ -460,8 +495,9 @@ def _trend(daily_by_date, runs, today: date):
 # ---------------------------------------------------------------- entry point
 
 
-def analyze(daily, runs, today, races=None, trail_elev_threshold: float = 20.0) -> dict:
-    """Compute all metrics and flags. `races` is the validated list from config.parse_races()."""
+def analyze(daily, runs, today, races=None, trail_elev_threshold: float = 20.0, weather=None) -> dict:
+    """Compute all metrics and flags. `races` is the validated list from config.parse_races();
+    `weather` is the dict from weather.assess() (or None)."""
     today = _d(today)
     daily = [x for x in (daily or []) if x.get("date") and _d(x["date"]) <= today]
     by_date = {_d(x["date"]): x for x in daily}
@@ -480,7 +516,7 @@ def analyze(daily, runs, today, races=None, trail_elev_threshold: float = 20.0) 
         races, clean_runs, today, trail["elev_gain_m"] or 0
     )
 
-    flags = _flags(totals, trail, load, recovery, active) + race_flags
+    flags = _flags(totals, trail, load, recovery, active) + _weather_flags(weather) + race_flags
     levels = {f["level"] for f in flags}
     status = "red" if "red" in levels else "yellow" if "yellow" in levels else "green"
 
@@ -493,6 +529,7 @@ def analyze(daily, runs, today, races=None, trail_elev_threshold: float = 20.0) 
         "trail_7d": trail,
         "load": load,
         "recovery": recovery,
+        "weather": weather or None,
         "training_phase": phase,
         "phase_race": phase_race,
         "races": race_list,

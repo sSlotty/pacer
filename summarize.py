@@ -46,6 +46,7 @@ Coaching rules:
 - A race with mini_taper true means a short load cut before it; post_race_recovery true means keep the load down for now.
 - With no races, advise from load and recovery alone.
 - If RHR is unusually high together with low HRV, advise rest, and say to see a doctor if ill or injured. Never give medical advice.
+- weather, when present, is the forecast for today's run window (window) where Oat runs. Fit recommendation to it: with heat_level moderate or worse, ease the effort by the pace_slowdown_pct_min–max range and stress hydration (severe: no hard session); with thunderstorm true, avoid exposed routes and ridges; with a high pm25, move the run indoors or onto a treadmill; heavy rain makes trails slippery. Mention the weather only when it changes the advice.
 
 Rules about numbers (most important):
 - Use only numbers present in the JSON. Never recompute, guess or invent a number.
@@ -69,6 +70,7 @@ DROP_FIELDS = {
     "road_7d": ("avg_pace_s_per_km",),
     "trail_7d": ("prev_week_elev_gain_m", "elev_loss_m"),
     "load": ("days_of_data", "hard_runs_7d"),
+    "weather": ("location_source", "source", "weather_code"),
 }
 DROP_RUN_FIELDS = ("name", "date")
 
@@ -250,6 +252,21 @@ def _session(result: dict) -> tuple[str, str]:
     return "Easy run / Workout", "Easy run หรือ workout ตามแผน ร่างกายพร้อมดี"
 
 
+def _weather_note(weather: dict | None) -> str:
+    if not weather:
+        return ""
+    notes = []
+    if weather.get("heat_level") == "severe":
+        notes.append("อากาศร้อนชื้นมาก เลี่ยงซ้อมหนัก")
+    elif weather.get("heat_level") == "high":
+        notes.append("อากาศร้อนชื้น ลด pace ลงและดื่มน้ำให้พอ")
+    if weather.get("thunderstorm"):
+        notes.append("มีพายุฝนฟ้าคะนอง เลี่ยงที่โล่ง")
+    if (weather.get("pm25") or 0) > 75:
+        notes.append("ฝุ่นสูง ย้ายไปวิ่งในร่ม")
+    return " · ".join(notes)
+
+
 def fallback_sections(result: dict) -> dict:
     """Summary sections built from the analysis only — no LLM. Numbers live in the embed fields."""
     status = result.get("status")
@@ -278,6 +295,9 @@ def fallback_sections(result: dict) -> dict:
         running = f"ระยะสัปดาห์นี้{'เพิ่มขึ้น' if change > 0 else 'ลดลง'}จากสัปดาห์ก่อน"
 
     session, recommendation = _session(result)
+    note = _weather_note(result.get("weather"))
+    if note and session != "พัก":
+        recommendation = f"{recommendation} · {note}"
     return {
         "headline": headline,
         "recovery": " · ".join(recovery),

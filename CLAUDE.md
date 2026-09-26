@@ -9,6 +9,7 @@
 1. ดึงข้อมูลการวิ่งและข้อมูลการฟื้นตัวจาก Garmin Connect ของเจ้าของ (Oat)
 2. เก็บข้อมูลย้อนหลังไว้ดูแนวโน้ม
 3. วิเคราะห์ 4 ด้าน: สถิติการวิ่ง (แยก road / trail), การฟื้นตัว (นอน/HRV/RHR), training load และความเสี่ยงบาดเจ็บ, การเตรียมตัวแข่ง
+   และประเมินสภาพอากาศช่วงเวลาที่จะออกซ้อมของวันนั้นจากพยากรณ์จริง (Open-Meteo, หัวข้อ 6.3)
 4. ให้ LLM (Claude API เป็นค่าเริ่มต้น หรือ OpenAI) เขียนสรุปและคำแนะนำการวิ่งเป็นภาษาไทย
 5. ส่งสรุปเข้า Discord ผ่าน webhook
 
@@ -37,6 +38,7 @@ garmin-daily/
 ├── .gitignore
 ├── config.py                  # อ่าน env ทั้งหมด
 ├── garmin_fetch.py            # login + ดึงข้อมูล + map field + กรองเฉพาะการวิ่ง
+├── weather.py                 # พยากรณ์อากาศช่วงเวลาซ้อมจาก Open-Meteo + ประเมินความร้อนชื้น/ฝน/ฝุ่น
 ├── storage.py                 # SQLite upsert/query
 ├── analysis.py                # คำนวณ metrics และ flags (stdlib only)
 ├── summarize.py               # เรียก LLM (Claude / OpenAI) + fallback
@@ -45,11 +47,12 @@ garmin-daily/
 ├── setup_tokens.py            # รันบนเครื่องเจ้าของครั้งเดียว (รองรับ MFA)
 ├── tests/test_analysis.py     # ทดสอบ analysis + RACES ด้วยข้อมูลจำลอง ไม่ต้องใช้เน็ต
 ├── tests/test_pipeline.py     # ทดสอบ fetch (fake API), storage, embed, fallback, main
+├── tests/test_weather.py      # ทดสอบ weather.assess + flags สภาพอากาศ (fake response)
 ├── data/garmin.db             # สร้างอัตโนมัติ, commit โดย workflow
 └── .github/workflows/daily.yml
 ```
 
-`analysis.py` และ `storage.py` ต้องใช้ stdlib เท่านั้น เพื่อให้ทดสอบได้โดยไม่ต้องติดตั้ง dependency ส่วน `requests`, `anthropic`, `garminconnect` ให้ import ภายในฟังก์ชันหรือเฉพาะในโมดูลที่ใช้
+`analysis.py`, `storage.py` และส่วน `assess()` ของ `weather.py` ต้องใช้ stdlib เท่านั้น เพื่อให้ทดสอบได้โดยไม่ต้องติดตั้ง dependency ส่วน `requests`, `anthropic`, `garminconnect` ให้ import ภายในฟังก์ชันหรือเฉพาะในโมดูลที่ใช้
 
 ## 4. Configuration (environment variables)
 
@@ -70,6 +73,8 @@ garmin-daily/
 | `DB_PATH` | ไม่ | `data/garmin.db` | |
 | `BACKFILL_DAYS` | ไม่ | `42` | ใช้เมื่อ DB ว่าง |
 | `REFRESH_DAYS` | ไม่ | `3` | ดึงซ้ำย้อนหลังเผื่อ sync ช้า |
+| `WEATHER_LAT` / `WEATHER_LON` | ไม่ | – | พิกัดที่ใช้ดูพยากรณ์อากาศ (Variables) ถ้าไม่ตั้ง ใช้จุดเริ่มของการวิ่งกลางแจ้งครั้งล่าสุดใน DB ถ้าไม่มีทั้งคู่ให้ข้ามส่วนอากาศ |
+| `RUN_TIME` | ไม่ | `07:00` | เวลาท้องถิ่นที่ออกวิ่ง ใช้กำหนดช่วงพยากรณ์ (ชั่วโมงนั้น + 2 ชั่วโมงถัดไป) |
 
 ตอนรันบนเครื่อง `config.py` อ่านไฟล์ `.env` (git-ignored, ตัวอย่างใน `.env.example`) ด้วย loader แบบ stdlib โดยไม่ทับ env ที่ตั้งไว้แล้ว ใน CI ไม่มีไฟล์นี้
 
@@ -149,17 +154,54 @@ garmin-daily/
 
 `running, street_running, track_running, treadmill_running, indoor_running, virtual_run, trail_running, ultra_run`
 
-map เป็น: `activity_id` (`activityId`), `date` (10 ตัวแรกของ `startTimeLocal`), `start_time`, `name`, `type_key` (`activityType.typeKey`), `run_category` (`road` / `trail` ตามหัวข้อ 8.1), `distance_m`, `duration_s`, `moving_s` (`movingDuration`), `elev_gain_m` (`elevationGain`), `elev_loss_m` (`elevationLoss`), `avg_hr`, `max_hr`, `avg_cadence` (`averageRunningCadenceInStepsPerMinute`), `training_load` (`activityTrainingLoad`), `aerobic_te`, `anaerobic_te` ตัดรายการที่ไม่มี `activity_id` หรือ `distance_m` เป็น 0 ทิ้ง
+map เป็น: `activity_id` (`activityId`), `date` (10 ตัวแรกของ `startTimeLocal`), `start_time`, `name`, `type_key` (`activityType.typeKey`), `run_category` (`road` / `trail` ตามหัวข้อ 8.1), `distance_m`, `duration_s`, `moving_s` (`movingDuration`), `elev_gain_m` (`elevationGain`), `elev_loss_m` (`elevationLoss`), `avg_hr`, `max_hr`, `avg_cadence` (`averageRunningCadenceInStepsPerMinute`), `training_load` (`activityTrainingLoad`), `aerobic_te`, `anaerobic_te`, `start_lat` / `start_lon` (`startLatitude` / `startLongitude` ปัดเหลือทศนิยม 2 ตำแหน่ง ≈ 1 km พอสำหรับพยากรณ์อากาศ และไม่เก็บพิกัดละเอียดของบ้าน) ตัดรายการที่ไม่มี `activity_id` หรือ `distance_m` เป็น 0 ทิ้ง
+
+### 6.3 สภาพอากาศ (weather.py)
+
+แหล่งข้อมูลคือ **Open-Meteo** (ฟรี ไม่ต้องใช้ API key, license CC BY 4.0 ต้องใส่เครดิตใน footer)
+
+- พยากรณ์: `GET https://api.open-meteo.com/v1/forecast` hourly `temperature_2m, relative_humidity_2m, dew_point_2m, apparent_temperature, precipitation_probability, precipitation, weather_code, wind_speed_10m, wind_gusts_10m, uv_index`
+- ฝุ่น: `GET https://air-quality-api.open-meteo.com/v1/air-quality` hourly `pm2_5`
+- ทั้งสองใช้ `latitude`, `longitude`, `timezone=TZ_NAME`, `start_date = end_date = today`, `timeout=15`
+- **ช่วงเวลาซ้อม** = ชั่วโมงของ `RUN_TIME` และอีก 2 ชั่วโมงถัดไป (3 ค่ารายชั่วโมง ครอบคลุมการวิ่งราว 2 ชม.)
+- endpoint ใดล้มเหลวให้ log warning แล้วใช้ `None` ถ้าล้มทั้งคู่ `weather` เป็น `None` และระบบทำงานต่อตามปกติ
+- ดึงอากาศ **เฉพาะรอบที่จะส่งจริง** (รอบที่มาเช็กข้อมูลการนอนแล้วยังไม่ส่ง ไม่ต้องเรียก)
+
+`assess(forecast_hourly, air_hourly, run_time, location_source) -> dict | None` (pure) คืนค่า:
+
+| key | ความหมาย |
+|---|---|
+| `window` | เช่น `07:00–09:00` |
+| `temp_c`, `temp_max_c`, `feels_like_max_c` | อุณหภูมิตอนเริ่ม, สูงสุด, ความรู้สึกสูงสุดในช่วง |
+| `humidity_pct` | ความชื้นตอนเริ่ม |
+| `dew_point_c` | จุดน้ำค้างสูงสุด |
+| `rain_chance_pct`, `rain_mm` | โอกาสฝนสูงสุด, ปริมาณฝนรวม |
+| `condition`, `weather_code`, `thunderstorm` | สภาพอากาศที่รุนแรงที่สุดในช่วง (WMO code → ภาษาไทย), `thunderstorm` = code 95–99 |
+| `wind_kmh`, `gust_kmh`, `uv_max` | ค่าสูงสุดในช่วง |
+| `pm25`, `pm25_level` | PM2.5 สูงสุด (µg/m³) และระดับตามเกณฑ์ของกรมควบคุมมลพิษ (≤15 ดีมาก, ≤25 ดี, ≤37.5 ปานกลาง, ≤75 เริ่มมีผลต่อสุขภาพ, >75 มีผลต่อสุขภาพ) |
+| `heat_score_f` | อุณหภูมิสูงสุด (°F) + จุดน้ำค้างสูงสุด (°F) |
+| `heat_level`, `pace_slowdown_pct_min` / `_max` | ระดับความร้อนชื้นและ pace ที่ควรช้าลงตามตารางด้านล่าง |
+
+| `heat_score_f` | pace ช้าลง | `heat_level` |
+|---|---|---|
+| ≤ 100 | 0% | `none` |
+| 101–120 | 0–1% | `none` |
+| 121–140 | 1–3% | `mild` |
+| 141–160 | 3–6% | `moderate` |
+| 161–180 | 6–10% | `high` |
+| > 180 | ไม่แนะนำวิ่งหนัก (`None`) | `severe` |
 
 ## 7. Storage (storage.py)
 
 SQLite สามตาราง: `daily_metrics` (PK `date`), `runs` (PK `activity_id`) คอลัมน์ตาม field ในหัวข้อ 6 และ `notifications` (PK `date`, คอลัมน์ `sent_at`, `source`, `status`) สำหรับกันส่งซ้ำตามหัวข้อ 11.1 พร้อมเมธอด `was_sent(date)` และ `mark_sent(date, source, status)`
 
+ตาราง `runs` มีคอลัมน์ `start_lat`, `start_lon` และเมธอด `last_run_location()` คืน `(lat, lon)` ของการวิ่งกลางแจ้งครั้งล่าสุดที่มีพิกัด (ไม่นับลู่วิ่ง) หรือ `None`
+
 Upsert ด้วย `INSERT ... ON CONFLICT DO UPDATE SET col = COALESCE(excluded.col, col)` เพื่อไม่ให้ค่า `None` จากการดึงรอบหลังทับค่าที่มีอยู่ มีเมธอด `is_empty()`, `daily_since(date)`, `runs_since(date)` คืนค่าเป็น list ของ dict
 
 ## 8. การวิเคราะห์ (analysis.py)
 
-`analyze(daily, runs, today, races=None, trail_elev_threshold=20.0) -> dict` ต้องเป็น pure function (`races` คือ list ที่ผ่าน `config.parse_races()` แล้ว, `run_category` ถูกคำนวณใหม่ตาม threshold ทุกครั้ง) ผลลัพธ์ต้อง serialize เป็น JSON ได้ และทุกค่าที่คำนวณไม่ได้ให้เป็น `None`
+`analyze(daily, runs, today, races=None, trail_elev_threshold=20.0, weather=None) -> dict` ต้องเป็น pure function (`weather` คือผลจาก `weather.assess()` ใส่ไว้ใน `result["weather"]` ตามเดิม) (`races` คือ list ที่ผ่าน `config.parse_races()` แล้ว, `run_category` ถูกคำนวณใหม่ตาม threshold ทุกครั้ง) ผลลัพธ์ต้อง serialize เป็น JSON ได้ และทุกค่าที่คำนวณไม่ได้ให้เป็น `None`
 
 **หลักการเรื่องวันที่**: ข้อมูลฟื้นตัว (sleep, HRV, readiness, body battery ตอนตื่น) ใช้ของ **วันนี้** เพราะเป็นคืนที่เพิ่งผ่านไป ส่วนข้อมูลที่สะสมทั้งวัน (stress, RHR) ใช้ของ **เมื่อวาน** เพราะของวันนี้ยังไม่ครบ
 
@@ -221,6 +263,13 @@ list ของ `{level: "red"|"yellow"|"info", message: <ภาษาไทย>}
 | ไม่มีวันพักเลยใน 7 วัน | yellow |
 | > 50% ของการวิ่งใน 7 วันมี `anaerobic_te ≥ 2.0` | yellow — ซ้อมหนักถี่เกินไป |
 | readiness level เป็น `LOW` หรือ `POOR` | yellow |
+| อากาศ: `heat_level` เป็น `high` หรือ `severe` | yellow — ร้อนชื้น ลดความหนัก ดื่มน้ำ |
+| อากาศ: `thunderstorm` | yellow — ระวังฟ้าผ่า เลี่ยงที่โล่ง/สันเขา |
+| อากาศ: `pm25` > 75 | yellow — ควรวิ่งในร่ม |
+| อากาศ: 37.5 < `pm25` ≤ 75 | info |
+| อากาศ: `rain_mm` ≥ 10 หรือ `gust_kmh` ≥ 50 | info — ทางลื่น / ลมแรง |
+
+flag สภาพอากาศไม่เคยเป็น red เพราะ red หมายถึงร่างกายต้องพัก ส่วนอากาศแค่เปลี่ยนรูปแบบการซ้อม
 
 สถานะรวม: มี red → `red`, มี yellow → `yellow`, ไม่มีเลย → `green`
 
@@ -289,6 +338,9 @@ list ของ `{level: "red"|"yellow"|"info", message: <ภาษาไทย>}
   - ใช้เฉพาะตัวเลขใน JSON, ข้าม field ที่เป็น null, ห้ามเดา
   - ใช้ Discord markdown ได้ (ตัวหนา, bullet) ไม่ต้องใส่หัวข้อ เพราะการ์ดมีหัวข้ออยู่แล้ว
   - ถ้าสถานะ red ต้องขึ้นต้นด้วยคำเตือนและแนะนำลดหรือพัก
+  - ถ้ามี `weather` ให้ปรับ `recommendation` ตามอากาศช่วงเวลาซ้อม: ร้อนชื้นให้ลดความหนักตาม `pace_slowdown_pct_*` และดื่มน้ำ, พายุฝนฟ้าคะนองให้เลี่ยงเส้นทางโล่ง/เทรล, PM2.5 สูงให้ย้ายเข้าลู่ พูดถึงอากาศเฉพาะเมื่อเปลี่ยนคำแนะนำ
+- `_compact()` ตัด `weather.location_source`, `source`, `weather_code` ออก
+- fallback ต่อท้าย `recommendation` ด้วยคำเตือนสภาพอากาศเมื่อเข้าเงื่อนไข flag
 - `fallback_sections(result)` สร้าง dict รูปแบบเดียวกันจาก flags และตัวเลขหลักโดยไม่ใช้ LLM
 
 ## 10. Discord (discord_notify.py)
@@ -304,7 +356,7 @@ list ของ `{level: "red"|"yellow"|"info", message: <ภาษาไทย>}
 4. `**🛌 การฟื้นตัว**` + `recovery`, `**🏃 การวิ่ง 7 วัน**` + `running`, `**📈 โหลด**` + `load`, `**🏁 รายการแข่ง**` + `races`
 
 **fields** (ตัวเลขหลัก ไม่ซ้ำกับข้อความ):
-- inline 3 คอลัมน์ แบ่งเป็นกลุ่ม: ฟื้นตัว (HRV, RHR, การนอน, Body battery, Readiness, VO2max) → วิ่ง (รวม 7 วัน, Road, Trail) → โหลด (ACWR, วันพัก, ซ้อมหนัก)
+- inline 3 คอลัมน์ แบ่งเป็นกลุ่ม: ฟื้นตัว (HRV, RHR, การนอน, Body battery, Readiness, VO2max) → อากาศช่วงซ้อม (อุณหภูมิ/สภาพ/ลม, ร้อนชื้น + pace ที่ควรช้าลง, ฝน + PM2.5 — ข้ามทั้งกลุ่มถ้าไม่มี `weather`) → วิ่ง (รวม 7 วัน, Road, Trail) → โหลด (ACWR, วันพัก, ซ้อมหนัก)
 - ช่อง ACWR ต้องมีทั้งค่า, โซน (สี + คำอธิบายโซน) และ**นิยามย่อ** `โหลด 7 วัน ÷ 28 วัน` กับช่วงปกติ `0.8–1.3` เพราะตัวย่อนี้ไม่สื่อความหมายในตัวเอง
 - **ซ่อนช่องที่ไม่มีข้อมูล** แทนการแสดง `–` (เช่น การนอนของคืนนี้ยังไม่ซิงก์ ให้แสดงค่าเฉลี่ย 7 วันแทนพร้อมบอกว่าเป็นค่าเฉลี่ย) และเติมช่องว่าง (`\u200b`) ให้แต่ละกลุ่มครบแถวละ 3 ช่อง เพื่อไม่ให้กลุ่มปนกัน
 - Road / Trail ที่ไม่มีการวิ่งใน 7 วันให้ข้าม ถ้าไม่มีการวิ่งเลยให้ช่องรวมแสดง `ไม่มีการวิ่ง`
@@ -312,7 +364,7 @@ list ของ `{level: "red"|"yellow"|"info", message: <ภาษาไทย>}
 - field สุดท้าย: ระยะรายสัปดาห์ 4 สัปดาห์เป็นแถบกราฟใน code block โดยกำกับ **ช่วงวันที่เต็ม** (`18/09-24/09`) และทำเครื่องหมายแถวสุดท้ายว่าเป็นสัปดาห์นี้ — ถ้ากำกับแค่วันเริ่มสัปดาห์ จะอ่านเหมือนข้อมูลค้างอยู่ที่วันนั้น
 - รูปแบบตัวเลข: km ทศนิยม 1 ตำแหน่ง, bpm ไม่มีทศนิยมถ้าเป็นจำนวนเต็ม, การเปลี่ยนแปลงใช้ลูกศร ▲/▼
 
-**footer**: `Pacer · ข้อมูลจาก Garmin Connect · สรุปโดย <Claude|ChatGPT>` หรือ `ข้อความอัตโนมัติ (ไม่ได้ใช้ AI)` + timestamp
+**footer**: `Pacer · ข้อมูลจาก Garmin Connect` (+ ` · อากาศจาก Open-Meteo` ถ้ามี `weather`) ` · สรุปโดย <Claude|ChatGPT>` หรือ `ข้อความอัตโนมัติ (ไม่ได้ใช้ AI)` + timestamp
 
 - ข้อจำกัด Discord: title ≤ 256, description ≤ 4,096, ≤ 25 fields, field name ≤ 256, value ≤ 1,024 และรวมทั้ง embed ≤ 6,000 ตัวอักษร (ถ้าเกินให้ตัด description)
 - ตรวจ HTTP status ถ้าไม่ใช่ 2xx ให้ raise
@@ -326,7 +378,7 @@ CLI: `python main.py [--dry-run] [--backfill N] [--date YYYY-MM-DD] [--force]`
 3. จำนวนวันที่ดึง = `--backfill` ถ้าระบุ, ไม่เช่นนั้น `BACKFILL_DAYS` ถ้า DB ว่าง, ไม่เช่นนั้น `REFRESH_DAYS`
 4. ดึง `fetch_runs` ทั้งช่วงแล้ว upsert ก่อน จากนั้นวนดึง `fetch_day` จากวันล่าสุดย้อนหลัง (sleep ระหว่างรอบ) แล้ว upsert — ลำดับนี้ทำให้ถ้าชนเพดาน 250 request ข้อมูลที่สำคัญที่สุดยังได้ครบ
    - ถ้า login ล้มเหลวด้วยเหตุอื่นที่ไม่ใช่ auth (เช่น เน็ต) ให้ log error แล้ววิเคราะห์จากข้อมูลที่มีใน DB และส่งสรุปตามปกติ
-5. อ่านข้อมูล 42 วันจาก DB → `analyze()`
+5. อ่านข้อมูล 42 วันจาก DB, ดึงอากาศ (หัวข้อ 6.3 พิกัดจาก `WEATHER_LAT/LON` หรือ `last_run_location()`) → `analyze()`
 6. `summarize()` ถ้าล้มเหลวใช้ `fallback_sections()` และ log error
 7. `--dry-run` ให้ print JSON และข้อความ ไม่ส่ง Discord, ไม่เช่นนั้นตรวจเงื่อนไขในหัวข้อ 11.1 แล้วส่ง Discord และบันทึกว่าส่งแล้ว
 
@@ -352,7 +404,7 @@ CLI: `python main.py [--dry-run] [--backfill N] [--date YYYY-MM-DD] [--force]`
 - `permissions: contents: write`, `concurrency: garmin-daily`
 - ขั้นตอน: `actions/checkout@v7` → `actions/setup-python@v7` (3.12, cache pip) — ใช้ major เวอร์ชันที่รันบน Node 24 เพื่อไม่ให้เจอ deprecation warning → `pip install -r requirements.txt` → `python main.py` → commit `data/garmin.db` กลับ repo ด้วยชื่อ `github-actions[bot]` เฉพาะเมื่อมีการเปลี่ยนแปลง (`git diff --cached --quiet || git commit`)
 - secrets: `GARMINTOKENS_BASE64`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (ถ้าใช้), `DISCORD_WEBHOOK_URL`
-- variables: `RACES` (JSON ตามหัวข้อ 4.1), และไม่บังคับ `LLM_PROVIDER`, `CLAUDE_MODEL`, `OPENAI_MODEL`, `TRAIL_ELEV_THRESHOLD`
+- variables: `RACES` (JSON ตามหัวข้อ 4.1), และไม่บังคับ `LLM_PROVIDER`, `CLAUDE_MODEL`, `OPENAI_MODEL`, `TRAIL_ELEV_THRESHOLD`, `WEATHER_LAT`, `WEATHER_LON`, `RUN_TIME`
 - ขั้น commit DB ใช้ `if: always()` เพื่อเก็บข้อมูลที่ดึงมาแล้วแม้ส่ง Discord ไม่สำเร็จ และ push เฉพาะเมื่อมี commit ใหม่
 
 ## 13. Dependencies
@@ -378,6 +430,7 @@ requests>=2.31
   - สัปดาห์ที่ไม่มีการวิ่งเลย และข้อมูลที่เป็น None ไม่ทำให้ crash
   - ผลลัพธ์ `json.dumps` ได้
 - ทดสอบว่า `fetch_runs` กรองกิจกรรมที่ไม่ใช่การวิ่งทิ้ง (ใช้ fake response)
+- `tests/test_weather.py`: ช่วงเวลาซ้อม, ตาราง heat, ระดับ PM2.5, flags สภาพอากาศ, API ล้มเหลวคืน `None` (ไม่ต่อเน็ต)
 - ทดสอบ embed builder ว่าไม่เกินข้อจำกัดของ Discord
 - ก่อนเปิดใช้ cron ต้องรัน `python main.py --dry-run` บนเครื่องให้ผ่านก่อน
 
