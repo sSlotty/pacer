@@ -20,7 +20,7 @@
 ## 2. กฎที่ห้ามละเมิด
 
 - **ห้าม commit credential ใด ๆ** (รหัสผ่าน Garmin, token, API key, webhook URL) ทุกอย่างต้องมาจาก environment variable / GitHub Secrets เท่านั้น เพิ่ม `garmin_tokens.b64`, `.env`, `~/.garminconnect` ใน `.gitignore`
-- **repo ต้องเป็น private** เพราะประวัติ git มีไฟล์ฐานข้อมูลสุขภาพเก่า (`data/garmin.db`) ถ้าตรวจพบว่า repo เป็น public ให้หยุดและแจ้งเจ้าของ
+- **repo เป็น public ได้** เพราะข้อมูลสุขภาพอยู่ใน Supabase เท่านั้น ห้าม commit ไฟล์ฐานข้อมูล (`data/*.db` อยู่ใน `.gitignore`), ข้อมูลสุขภาพ, ชื่อสถานที่วิ่ง หรือพิกัดใด ๆ เข้า repo และห้าม log ตัวเลขสุขภาพใน GitHub Actions เพราะ log ของ repo public ทุกคนเห็นได้ (ถ้าต้องดู ให้ใช้ `--dry-run` บนเครื่อง)
 - **ข้อมูลสุขภาพเก็บใน Supabase (Postgres)** ทุกตารางต้องเปิด Row Level Security โดยไม่มี policy เพื่อให้ anon / authenticated key ของ Supabase (PostgREST) อ่านไม่ได้ ระบบเข้าถึงผ่าน connection string (`DATABASE_URL`) ซึ่งเป็น role เจ้าของตารางเท่านั้น และ `DATABASE_URL` เป็น secret ห้าม log
 - **ห้ามเก็บรหัสผ่าน Garmin ใน CI** ใช้ token แบบ base64 (`GARMINTOKENS_BASE64`) ที่สร้างจากเครื่องเจ้าของเท่านั้น
 - **ห้ามเรียก Garmin ถี่** รันได้ไม่เกินวันละ ~6 รอบ (ดูหัวข้อ 11.1) แต่ละรอบดึงไม่กี่วัน, ใส่ `time.sleep(0.3–0.5)` ระหว่าง request, ห้ามเกิน ~250 request ต่อรอบ และรวมทั้งวันไม่ควรเกิน ~150 request ดังนั้น `REFRESH_DAYS` ต้องน้อย (ค่าเริ่มต้น 3)
@@ -50,7 +50,7 @@ garmin-daily/
 ├── tests/test_analysis.py     # ทดสอบ analysis + RACES ด้วยข้อมูลจำลอง ไม่ต้องใช้เน็ต
 ├── tests/test_pipeline.py     # ทดสอบ fetch (fake API), storage, embed, fallback, main
 ├── tests/test_weather.py      # ทดสอบ weather.assess + flags สภาพอากาศ (fake response)
-├── data/garmin.db             # SQLite สำหรับรันบนเครื่องเมื่อไม่ตั้ง DATABASE_URL (ไม่ commit อีกต่อไป)
+├── data/garmin.db             # SQLite สำหรับรันบนเครื่องเมื่อไม่ตั้ง DATABASE_URL (git-ignored ห้าม commit)
 └── .github/workflows/daily.yml
 ```
 
@@ -406,7 +406,8 @@ CLI: `python main.py [--dry-run] [--backfill N] [--date YYYY-MM-DD] [--force]`
   - **cron ของ GitHub ไม่ตรงเวลาและรับประกันไม่ได้** วัดจริง: ตั้ง 08:00 รันจริง 12:53 และอีกวันตั้ง 5 รอบช่วง 05:00–06:45 GitHub ข้าม 3 รอบแรกแล้วรัน 07:39 กับ 08:53
   - วิธีรับมือคือรันหลายรอบกระจายทั้งเช้า + เงื่อนไขในหัวข้อ 11.1 (ส่งครั้งเดียว รอบแรกที่ข้อมูลพร้อม) ไม่ใช่การตั้งเวลาให้แม่นขึ้น
   - รอบที่ไม่ได้ส่งใช้เวลา ~1 นาทีและยิง Garmin แค่ 5 request รวมทั้งวันประมาณ 86 request และ ~15 นาทีของโควตา Actions
-- `permissions: contents: read`, `concurrency: garmin-daily`
+- `permissions: contents: read, actions: write`, `concurrency: garmin-daily`
+- **keepalive**: GitHub ปิด scheduled workflow ของ repo public อัตโนมัติเมื่อ repo ไม่มีความเคลื่อนไหว 60 วัน และระบบไม่ commit DB ทุกวันแล้ว จึงมีขั้นสุดท้ายในรอบ `schedule` ที่เรียก `gh api -X PUT repos/<repo>/actions/workflows/daily.yml/enable` เพื่อต่ออายุ (ต้องใช้ `actions: write`)
 - ขั้นตอน: `actions/checkout@v7` → `actions/setup-python@v7` (3.12, cache pip) — ใช้ major เวอร์ชันที่รันบน Node 24 เพื่อไม่ให้เจอ deprecation warning → `pip install -r requirements.txt` → `python main.py` (ข้อมูลเขียนลง Supabase โดยตรง ไม่ commit ไฟล์ DB กลับ repo แล้ว)
 - secrets: `DATABASE_URL`, `GARMINTOKENS_BASE64`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (ถ้าใช้), `DISCORD_WEBHOOK_URL`
 - variables: `RACES` (JSON ตามหัวข้อ 4.1), และไม่บังคับ `LLM_PROVIDER`, `CLAUDE_MODEL`, `OPENAI_MODEL`, `TRAIL_ELEV_THRESHOLD`, `WEATHER_LAT`, `WEATHER_LON`, `RUN_TIME`

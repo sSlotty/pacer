@@ -18,3 +18,6 @@ venv/
 .DS_Store
 .vscode/
 .idea/
+
+# Health data — lives in Supabase; the local SQLite fallback is never committed
+data/*.db

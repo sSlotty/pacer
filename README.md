@@ -40,7 +40,7 @@ Garmin Connect ──► garmin_fetch.py ──► Supabase Postgres (หรื�
   - OpenAI ([platform.openai.com](https://platform.openai.com)) — สมาชิก ChatGPT Plus ใช้กับ API ไม่ได้
 - Discord webhook (Server Settings → Integrations → Webhooks → New Webhook → Copy Webhook URL)
 - โปรเจกต์ [Supabase](https://supabase.com) (แพ็กเกจฟรีพอ) สำหรับเก็บข้อมูลย้อนหลัง
-- GitHub repository แบบ **private** (ประวัติ git มีไฟล์ฐานข้อมูลสุขภาพเก่า `data/garmin.db`)
+- GitHub repository (public หรือ private ก็ได้ ข้อมูลสุขภาพอยู่ใน Supabase ไม่ได้อยู่ใน repo)
 
 ## ขั้นตอนติดตั้ง
 
@@ -250,6 +250,7 @@ docker stop pacer-pg-test
 ## ความปลอดภัย
 
 - ห้าม commit token, API key หรือ webhook URL — ทุกอย่างอยู่ใน GitHub Secrets
-- repo ต้องเป็น **private** เสมอ
+- ข้อมูลสุขภาพเก็บใน Supabase (เปิด Row Level Security) ไม่อยู่ใน repo จึงเปิด repo เป็น public ได้ แต่ห้าม commit ไฟล์ `.db` (อยู่ใน `.gitignore` แล้ว)
+- log ของ GitHub Actions ใน repo public ทุกคนเห็นได้ ระบบจึงไม่ log ตัวเลขสุขภาพ
 - ระบบไม่เก็บรหัสผ่าน Garmin ใช้เฉพาะ token
 - ระบบดึงข้อมูลวันละครั้ง หน่วง 0.4 วินาทีระหว่าง request และจำกัดไม่เกิน 250 request ต่อรอบ
