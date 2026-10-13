@@ -23,7 +23,7 @@
 - **repo เป็น public ได้** เพราะข้อมูลสุขภาพอยู่ใน Supabase เท่านั้น ห้าม commit ไฟล์ฐานข้อมูล (`data/*.db` อยู่ใน `.gitignore`), ข้อมูลสุขภาพ, ชื่อสถานที่วิ่ง หรือพิกัดใด ๆ เข้า repo และห้าม log ตัวเลขสุขภาพใน GitHub Actions เพราะ log ของ repo public ทุกคนเห็นได้ (ถ้าต้องดู ให้ใช้ `--dry-run` บนเครื่อง)
 - **ข้อมูลสุขภาพเก็บใน Supabase (Postgres)** ทุกตารางต้องเปิด Row Level Security โดยไม่มี policy เพื่อให้ anon / authenticated key ของ Supabase (PostgREST) อ่านไม่ได้ ระบบเข้าถึงผ่าน connection string (`DATABASE_URL`) ซึ่งเป็น role เจ้าของตารางเท่านั้น และ `DATABASE_URL` เป็น secret ห้าม log
 - **ห้ามเก็บรหัสผ่าน Garmin ใน CI** ใช้ token แบบ base64 (`GARMINTOKENS_BASE64`) ที่สร้างจากเครื่องเจ้าของเท่านั้น
-- **ห้ามเรียก Garmin ถี่** รันได้ไม่เกินวันละ ~6 รอบ (ดูหัวข้อ 11.1) แต่ละรอบดึงไม่กี่วัน, ใส่ `time.sleep(0.3–0.5)` ระหว่าง request, ห้ามเกิน ~250 request ต่อรอบ และรวมทั้งวันไม่ควรเกิน ~150 request ดังนั้น `REFRESH_DAYS` ต้องน้อย (ค่าเริ่มต้น 3)
+- **ห้ามเรียก Garmin ถี่** รันได้ไม่เกินวันละ ~13 รอบ (ดูหัวข้อ 11.1 และ 12) แต่ละรอบดึงไม่กี่วัน, ใส่ `time.sleep(0.3–0.5)` ระหว่าง request, ห้ามเกิน ~250 request ต่อรอบ และรวมทั้งวันไม่ควรเกิน ~150 request ดังนั้น `REFRESH_DAYS` ต้องน้อย (ค่าเริ่มต้น 3)
 - **การ fetch ต้องทนความล้มเหลว**: endpoint ใดพังให้ log warning แล้วใช้ `None` ห้ามให้ทั้งระบบล่ม
 - **LLM ห้ามแต่งตัวเลข**: ทุกตัวเลขในข้อความสรุปต้องมาจาก JSON ที่ส่งไปเท่านั้น
 - **ถ้า LLM ทุกเจ้าล้มเหลว ต้องยังส่ง Discord ได้** ด้วยข้อความสรุปแบบ rule-based (fallback)
@@ -42,6 +42,7 @@ garmin-daily/
 ├── weather.py                 # พยากรณ์อากาศช่วงเวลาซ้อมจาก Open-Meteo + ประเมินความร้อนชื้น/ฝน/ฝุ่น
 ├── storage.py                 # upsert/query: Supabase Postgres (DATABASE_URL) หรือ SQLite ถ้าไม่ตั้ง
 ├── migrate_to_supabase.py     # คัดลอกข้อมูลจาก SQLite เดิมขึ้น Supabase (รันครั้งเดียว, รันซ้ำได้)
+├── supabase_dispatch.sql      # ตั้ง pg_cron ใน Supabase ให้สั่งรัน workflow ตรงเวลา (หัวข้อ 12) รันครั้งเดียวใน SQL Editor
 ├── analysis.py                # คำนวณ metrics และ flags (stdlib only)
 ├── summarize.py               # เรียก LLM (Claude / OpenAI) + fallback
 ├── discord_notify.py          # สร้าง embed + ส่ง webhook
@@ -397,17 +398,20 @@ CLI: `python main.py [--dry-run] [--backfill N] [--date YYYY-MM-DD] [--force]`
 3. ถ้าจะส่ง ให้ดึงเต็มช่วง `REFRESH_DAYS` (พร้อมกิจกรรมวิ่ง) แล้ววิเคราะห์ ส่ง Discord และบันทึกลง `notifications`
 4. ถ้า login Garmin ไม่ได้ ให้ใช้ข้อมูลใน DB ตัดสินตามเงื่อนไขข้อ 2 เหมือนกัน
 
-`--force` ข้ามเงื่อนไขทั้งหมด (ใช้กับ `workflow_dispatch` และการทดสอบ) ส่วน `--date` ที่ระบุเองถือว่าเป็นการสั่งด้วยมือ ให้ข้ามเงื่อนไขข้อ 2 แต่ยังกันส่งซ้ำ
+`--force` ข้ามเงื่อนไขทั้งหมด (ใช้กับ `workflow_dispatch` ที่กดเอง และการทดสอบ ส่วน dispatch จาก pg_cron ส่ง `force=false` จึงผ่านเงื่อนไขตามปกติ) ส่วน `--date` ที่ระบุเองถือว่าเป็นการสั่งด้วยมือ ให้ข้ามเงื่อนไขข้อ 2 แต่ยังกันส่งซ้ำ
 8. ใช้ `logging` ระดับ INFO, ห้าม log token หรือ webhook URL
 
 ## 12. GitHub Actions (.github/workflows/daily.yml)
 
-- trigger: `schedule: cron "0,30 19-23 * * *"` และ `"45 23 * * *"` (02:00–06:45 เวลาไทย รวม 11 รอบ) และ `workflow_dispatch` (ใส่ `--force`)
-  - **cron ของ GitHub ไม่ตรงเวลาและรับประกันไม่ได้** วัดจริง: ตั้ง 08:00 รันจริง 12:53 และอีกวันตั้ง 5 รอบช่วง 05:00–06:45 GitHub ข้าม 3 รอบแรกแล้วรัน 07:39 กับ 08:53
-  - วิธีรับมือคือรันหลายรอบกระจายทั้งเช้า + เงื่อนไขในหัวข้อ 11.1 (ส่งครั้งเดียว รอบแรกที่ข้อมูลพร้อม) ไม่ใช่การตั้งเวลาให้แม่นขึ้น
-  - รอบที่ไม่ได้ส่งใช้เวลา ~1 นาทีและยิง Garmin แค่ 5 request รวมทั้งวันประมาณ 86 request และ ~15 นาทีของโควตา Actions
+- trigger หลัก: **Supabase pg_cron** (`supabase_dispatch.sql`) เรียก GitHub API `POST /repos/<repo>/actions/workflows/daily.yml/dispatches` ด้วย `{"ref": "main", "inputs": {"force": "false"}}` ทุก 15 นาทีช่วง 05:00–06:45 เวลาไทย (`*/15 22-23 * * *` UTC, 8 รอบ) และ**ยิงเฉพาะเมื่อยังไม่มีแถวของวันนี้ในตาราง `notifications`** — รอบ 06:45 จึงเป็นรอบที่รับประกันว่าจะส่งตาม `SEND_DEADLINE`
+  - PAT แบบ fine-grained (เฉพาะ repo นี้, Actions: Read and write) เก็บใน Supabase Vault ชื่อ `github_dispatch_token` ห้ามใส่ token ลงไฟล์ SQL ใน repo
+  - ใช้ `pg_net` ซึ่งยิงแบบ async ดูผลได้จาก `net._http_response` (ปกติได้ 204)
+- trigger สำรอง: `schedule: cron "17 19-23 * * *"` (02:17–06:17 เวลาไทย 5 รอบ, นาทีไม่ใช่เลขกลมเพราะต้นชั่วโมงคิวของ GitHub แน่นที่สุด) เผื่อ Supabase/pg_cron ล่ม
+  - **cron ของ GitHub ไม่ตรงเวลาและรับประกันไม่ได้** วัดจริง: ตั้ง 08:00 รันจริง 12:53, อีกวันตั้ง 5 รอบช่วง 05:00–06:45 GitHub ข้าม 3 รอบแรกแล้วรัน 07:39 กับ 08:53 และช่วง 3–13 ต.ค. 2026 ที่ตั้งไว้ 11 รอบ/วัน GitHub รันจริงแค่ 2–3 รอบ ส่งช้ากว่า 07:00 ไป 3 ใน 11 วัน (เช่น 13 ต.ค. ไม่รันเลยทั้ง 11 รอบ รอบแรก 08:08) จึงย้ายมาใช้ pg_cron เป็นตัวหลัก
+- `workflow_dispatch` มี input `force` (boolean, ค่าเริ่มต้น `true`) กดเองจากหน้า Actions จะใส่ `--force` ส่วน pg_cron ส่ง `false`
+- รอบที่ไม่ได้ส่งใช้เวลา ~1 นาทีและยิง Garmin แค่ 5 request รวมทั้งวันไม่เกิน ~13 รอบ ต่ำกว่า 150 request
 - `permissions: contents: read, actions: write`, `concurrency: garmin-daily`
-- **keepalive**: GitHub ปิด scheduled workflow ของ repo public อัตโนมัติเมื่อ repo ไม่มีความเคลื่อนไหว 60 วัน และระบบไม่ commit DB ทุกวันแล้ว จึงมีขั้นสุดท้ายในรอบ `schedule` ที่เรียก `gh api -X PUT repos/<repo>/actions/workflows/daily.yml/enable` เพื่อต่ออายุ (ต้องใช้ `actions: write`)
+- **keepalive**: GitHub ปิด scheduled workflow ของ repo public อัตโนมัติเมื่อ repo ไม่มีความเคลื่อนไหว 60 วัน และระบบไม่ commit DB ทุกวันแล้ว จึงมีขั้นสุดท้ายในรอบอัตโนมัติ (`schedule` และ dispatch ที่ `force=false`) ที่เรียก `gh api -X PUT repos/<repo>/actions/workflows/daily.yml/enable` เพื่อต่ออายุ (ต้องใช้ `actions: write`)
 - ขั้นตอน: `actions/checkout@v7` → `actions/setup-python@v7` (3.12, cache pip) — ใช้ major เวอร์ชันที่รันบน Node 24 เพื่อไม่ให้เจอ deprecation warning → `pip install -r requirements.txt` → `python main.py` (ข้อมูลเขียนลง Supabase โดยตรง ไม่ commit ไฟล์ DB กลับ repo แล้ว)
 - secrets: `DATABASE_URL`, `GARMINTOKENS_BASE64`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (ถ้าใช้), `DISCORD_WEBHOOK_URL`
 - variables: `RACES` (JSON ตามหัวข้อ 4.1), และไม่บังคับ `LLM_PROVIDER`, `CLAUDE_MODEL`, `OPENAI_MODEL`, `TRAIL_ELEV_THRESHOLD`, `WEATHER_LAT`, `WEATHER_LON`, `RUN_TIME`

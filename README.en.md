@@ -63,14 +63,14 @@ flowchart LR
     R --> D
 ```
 
-GitHub Actions runs every 30 minutes from **02:00 to 06:45** (Bangkok time) and posts the card **once a day**, on the first run after last night's sleep has synced to Garmin.
+Supabase pg_cron triggers GitHub Actions every 15 minutes from **05:00 to 06:45** (Bangkok time), and Pacer posts the card **once a day**, on the first run after last night's sleep has synced to Garmin.
 
 1. Already posted today → store any newly synced data, then stop
 2. Sleep / HRV not synced yet → wait for the next run (this run fetches a single day only)
 3. Data is ready, or `SEND_DEADLINE` (06:45) has passed → analyse and post with whatever is available
 
 > [!TIP]
-> Pacer runs many times because GitHub's cron can start hours late and sometimes skips runs entirely. If you run at a different time, change `SEND_DEADLINE`, `RUN_TIME` and the cron window in [`daily.yml`](.github/workflows/daily.yml) (cron uses UTC = Bangkok time − 7 h).
+> pg_cron is the main trigger because GitHub's cron can start hours late and often skips runs (the cron in [`daily.yml`](.github/workflows/daily.yml) stays as a backup). If you run at a different time, change `SEND_DEADLINE`, `RUN_TIME` and the schedule in [`supabase_dispatch.sql`](supabase_dispatch.sql) (cron uses UTC = Bangkok time − 7 h).
 
 <details>
 <summary><b>Project Structure</b></summary>
@@ -87,6 +87,7 @@ GitHub Actions runs every 30 minutes from **02:00 to 06:45** (Bangkok time) and 
 | [`config.py`](config.py) | Reads environment variables and validates `RACES` |
 | [`setup_tokens.py`](setup_tokens.py) | Creates Garmin tokens (run once on your machine) |
 | [`migrate_to_supabase.py`](migrate_to_supabase.py) | Copies SQLite history to Supabase |
+| [`supabase_dispatch.sql`](supabase_dispatch.sql) | Sets up pg_cron to trigger the workflow on time |
 | [`CLAUDE.md`](CLAUDE.md) | Full system specification (Thai) |
 
 </details>
@@ -160,6 +161,13 @@ In your repo → **Settings → Secrets and variables → Actions**, add these s
 | `OPENAI_API_KEY` | If you use ChatGPT |
 
 Then open **Actions → Garmin daily running coach → Run workflow** to test it. A manual run always posts a card. If it succeeds, you will see the card in Discord and new rows in Supabase.
+
+### 6. Schedule with Supabase pg_cron
+
+1. Create a [fine-grained token](https://github.com/settings/personal-access-tokens/new) for this repo only, with **Actions: Read and write**
+2. In Supabase → **SQL Editor**, run `select vault.create_secret('<token>', 'github_dispatch_token');` (never save the token in a repo file)
+3. Run the whole of [`supabase_dispatch.sql`](supabase_dispatch.sql) (if you forked, change the repo name in the URL first)
+4. The next morning, check the results with the queries at the end of the file (GitHub answers `204` when the dispatch worked)
 
 ## Configuration
 
@@ -264,7 +272,7 @@ Before adding a feature, update the spec in [`CLAUDE.md`](CLAUDE.md) first.
 | The card says "ไม่ได้ใช้ AI" (no AI used) | Every provider in `LLM_PROVIDER` failed (wrong key, no credit, …). Check the Actions log |
 | Workflow fails with `DATABASE_URL is not set` | Add the `DATABASE_URL` secret |
 | Can't reach Supabase / `Network is unreachable` | Use the Session pooler connection string, not `db.<ref>.supabase.co` |
-| The card arrives later than expected | GitHub's cron can run hours late. For exact timing, run it on your own machine with `launchd` or cron |
+| The card arrives later than expected | pg_cron did not trigger a run. Check `net._http_response` with the queries at the end of [`supabase_dispatch.sql`](supabase_dispatch.sql). A `401` means the token expired: create a new one and run `vault.update_secret` |
 | Some fields are missing from the card | Garmin hasn't synced yet, or your watch doesn't record that metric. The last 3 days are re-fetched automatically |
 | Garmin endpoint errors | `garminconnect` is an unofficial API. Try `pip install -U garminconnect` first |
 | You need to re-run `setup_tokens.py` every 1–2 days | Tokens refreshed in CI are not written back to the secret; if Garmin revokes the old refresh token, this happens |

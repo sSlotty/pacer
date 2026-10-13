@@ -63,14 +63,14 @@ flowchart LR
     R --> D
 ```
 
-GitHub Actions รันทุก 30 นาทีช่วง **02:00–06:45** (เวลาไทย) และส่งการ์ด **วันละครั้ง** ในรอบแรกที่ข้อมูลการนอนเมื่อคืนซิงก์เข้า Garmin แล้ว
+Supabase pg_cron สั่งรัน GitHub Actions ทุก 15 นาทีช่วง **05:00–06:45** (เวลาไทย) และส่งการ์ด **วันละครั้ง** ในรอบแรกที่ข้อมูลการนอนเมื่อคืนซิงก์เข้า Garmin แล้ว
 
 1. ถ้าวันนี้ส่งไปแล้ว → เก็บข้อมูลที่เพิ่งซิงก์เข้าฐานข้อมูล แล้วจบ
 2. ถ้าข้อมูลการนอน / HRV ยังไม่เข้า → รอรอบถัดไป (รอบนี้ดึงข้อมูลแค่วันเดียว)
 3. ถ้าข้อมูลพร้อมแล้ว หรือถึงเวลา `SEND_DEADLINE` (06:45) → วิเคราะห์และส่งทันทีด้วยข้อมูลที่มี
 
 > [!TIP]
-> ใช้หลายรอบเพราะ cron ของ GitHub เลื่อนเวลาได้หลายชั่วโมงและบางครั้งข้ามรอบไปเลย ถ้าคุณออกวิ่งคนละเวลา ให้แก้ `SEND_DEADLINE`, `RUN_TIME` และช่วงเวลา cron ใน [`daily.yml`](.github/workflows/daily.yml) (cron ใช้เวลา UTC = เวลาไทย − 7 ชม.)
+> ใช้ pg_cron เป็นตัวหลักเพราะ cron ของ GitHub เลื่อนเวลาได้หลายชั่วโมงและมักข้ามรอบ (cron ใน [`daily.yml`](.github/workflows/daily.yml) เหลือไว้เป็นตัวสำรอง) ถ้าคุณออกวิ่งคนละเวลา ให้แก้ `SEND_DEADLINE`, `RUN_TIME` และช่วงเวลาใน [`supabase_dispatch.sql`](supabase_dispatch.sql) (cron ใช้เวลา UTC = เวลาไทย − 7 ชม.)
 
 <details>
 <summary><b>Project Structure</b></summary>
@@ -87,6 +87,7 @@ GitHub Actions รันทุก 30 นาทีช่วง **02:00–06:45** 
 | [`config.py`](config.py) | อ่าน environment variables และตรวจรูปแบบ `RACES` |
 | [`setup_tokens.py`](setup_tokens.py) | สร้าง token ของ Garmin (รันบนเครื่องครั้งเดียว) |
 | [`migrate_to_supabase.py`](migrate_to_supabase.py) | ย้ายข้อมูลจาก SQLite ขึ้น Supabase |
+| [`supabase_dispatch.sql`](supabase_dispatch.sql) | ตั้ง pg_cron ให้สั่งรัน workflow ตรงเวลา |
 | [`CLAUDE.md`](CLAUDE.md) | สเปกฉบับเต็มของระบบ |
 
 </details>
@@ -160,6 +161,13 @@ python main.py --dry-run
 | `OPENAI_API_KEY` | ถ้าใช้ ChatGPT |
 
 จากนั้นไปที่ **Actions → Garmin daily running coach → Run workflow** เพื่อทดสอบ การกดรันเองจะส่งการ์ดทันทีเสมอ ถ้าผ่าน จะเห็นการ์ดใน Discord และข้อมูลใหม่ใน Supabase
+
+### 6. ตั้งเวลาด้วย Supabase pg_cron
+
+1. สร้าง [fine-grained token](https://github.com/settings/personal-access-tokens/new) เลือกเฉพาะ repo นี้ สิทธิ์ **Actions: Read and write**
+2. ใน Supabase → **SQL Editor** รัน `select vault.create_secret('<token>', 'github_dispatch_token');` (ห้ามบันทึก token ลงไฟล์ใน repo)
+3. รันเนื้อหาทั้งไฟล์ [`supabase_dispatch.sql`](supabase_dispatch.sql) (ถ้า fork มา ให้แก้ชื่อ repo ใน URL ก่อน)
+4. เช้าวันถัดไป ดูผลด้วยคำสั่งตรวจสอบท้ายไฟล์ (GitHub ตอบ `204` แปลว่าสั่งรันสำเร็จ)
 
 ## Configuration
 
@@ -264,7 +272,7 @@ docker stop pacer-pg-test
 | การ์ดเขียนว่า "ไม่ได้ใช้ AI" | AI ทุกเจ้าใน `LLM_PROVIDER` ล้มเหลว (key ผิด, เครดิตหมด ฯลฯ) ดูรายละเอียดใน log ของ Actions |
 | workflow ขึ้น `DATABASE_URL is not set` | เพิ่ม secret `DATABASE_URL` |
 | ต่อ Supabase ไม่ได้ / `Network is unreachable` | ใช้ connection string แบบ Session pooler ไม่ใช่ `db.<ref>.supabase.co` |
-| การ์ดมาช้ากว่าที่ตั้งไว้ | cron ของ GitHub เลื่อนได้หลายชั่วโมง ถ้าต้องการให้ตรงเวลาจริง ๆ ให้รันบนเครื่องตัวเองด้วย `launchd` หรือ cron |
+| การ์ดมาช้ากว่าที่ตั้งไว้ | pg_cron ไม่ได้สั่งรัน ดู `net._http_response` ตามท้าย [`supabase_dispatch.sql`](supabase_dispatch.sql) ถ้าได้ `401` แปลว่า token หมดอายุ ให้สร้างใหม่แล้ว `vault.update_secret` |
 | บางช่องในการ์ดหายไป | Garmin ยังไม่ซิงก์ หรือนาฬิการุ่นนั้นไม่มีข้อมูลนั้น ระบบดึงซ้ำย้อนหลัง 3 วันให้อัตโนมัติ |
 | Garmin endpoint error | `garminconnect` เป็น API ไม่เป็นทางการ ลอง `pip install -U garminconnect` ก่อน |
 | ต้องรัน `setup_tokens.py` ใหม่ทุก 1–2 วัน | token ที่ refresh ใน CI ไม่ถูกบันทึกกลับเข้า secret ถ้า Garmin ยกเลิก refresh token เก่า จะเกิดอาการนี้ |

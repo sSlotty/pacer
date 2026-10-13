@@ -2,13 +2,16 @@ name: Garmin daily running coach
 
 on:
   schedule:
-    # 02:00–06:45 Asia/Bangkok, every 30 minutes. GitHub's scheduler runs late (1.5–5
-    # hours observed) and skips firings, so spread many attempts across the morning;
-    # main.py posts exactly once, on the first attempt that has last night's Garmin
-    # data, and by SEND_DEADLINE at the latest (CLAUDE.md §11.1).
-    - cron: "0,30 19-23 * * *"
-    - cron: "45 23 * * *"
+    # Backup only. The primary trigger is Supabase pg_cron (supabase_dispatch.sql), which
+    # dispatches this workflow every 15 minutes 05:00–06:45 Asia/Bangkok until today's summary
+    # is sent. GitHub's scheduler runs hours late and skips most firings (CLAUDE.md §12).
+    - cron: "17 19-23 * * *"
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Send now, ignoring the once-a-day and wait-for-sleep-data rules"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -53,12 +56,12 @@ jobs:
             echo "::error::Secret DATABASE_URL is not set (Supabase Session pooler connection string)"
             exit 1
           fi
-          python main.py ${{ github.event_name == 'workflow_dispatch' && '--force' || '' }}
+          python main.py ${{ github.event_name == 'workflow_dispatch' && inputs.force && '--force' || '' }}
 
       - name: Keep the schedule alive
         # GitHub disables cron workflows in public repos after 60 days without repo activity,
         # and nothing is committed daily any more. Re-enabling resets that timer.
-        if: always() && github.event_name == 'schedule'
+        if: always() && (github.event_name == 'schedule' || !inputs.force)
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/daily.yml/enable"
