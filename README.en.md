@@ -63,7 +63,7 @@ flowchart LR
     R --> D
 ```
 
-Supabase pg_cron triggers GitHub Actions every 15 minutes from **05:00 to 06:45** (Bangkok time), and Pacer posts the card **once a day**, on the first run after last night's sleep has synced to Garmin.
+Supabase pg_cron triggers GitHub Actions every 15 minutes from **04:00 to 06:45** (Bangkok time), and Pacer posts the card **once a day**, on the first run after last night's sleep has synced to Garmin.
 
 1. Already posted today → store any newly synced data, then stop
 2. Sleep / HRV not synced yet → wait for the next run (this run fetches a single day only)

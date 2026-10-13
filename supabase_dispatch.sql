@@ -1,6 +1,6 @@
 -- Primary trigger for the daily workflow (CLAUDE.md §12).
 -- GitHub's own cron runs hours late and skips most firings, so Supabase pg_cron dispatches
--- the workflow on time instead: every 15 minutes 05:00–06:45 Asia/Bangkok, only until
+-- the workflow on time instead: every 15 minutes 04:00–06:45 Asia/Bangkok, only until
 -- today's summary is in `notifications`. main.py still decides whether a run sends (§11.1).
 --
 -- Run once in the Supabase SQL Editor. Safe to re-run. If you forked the repo, change
@@ -17,10 +17,10 @@
 create extension if not exists pg_cron;
 create extension if not exists pg_net with schema extensions;
 
--- pg_cron runs in UTC: 22:00–23:45 UTC = 05:00–06:45 Asia/Bangkok.
+-- pg_cron runs in UTC: 21:00–23:45 UTC = 04:00–06:45 Asia/Bangkok.
 select cron.schedule(
   'pacer-dispatch',
-  '*/15 22-23 * * *',
+  '*/15 21-23 * * *',
   $$
   select net.http_post(
     url := 'https://api.github.com/repos/sSlotty/pacer/actions/workflows/daily.yml/dispatches',

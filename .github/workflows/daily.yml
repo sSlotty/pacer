@@ -3,7 +3,7 @@ name: Garmin daily running coach
 on:
   schedule:
     # Backup only. The primary trigger is Supabase pg_cron (supabase_dispatch.sql), which
-    # dispatches this workflow every 15 minutes 05:00–06:45 Asia/Bangkok until today's summary
+    # dispatches this workflow every 15 minutes 04:00–06:45 Asia/Bangkok until today's summary
     # is sent. GitHub's scheduler runs hours late and skips most firings (CLAUDE.md §12).
     - cron: "17 19-23 * * *"
   workflow_dispatch:
