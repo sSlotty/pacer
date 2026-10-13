@@ -9,7 +9,7 @@
 1. ดึงข้อมูลการวิ่งและข้อมูลการฟื้นตัวจาก Garmin Connect ของเจ้าของ (Oat)
 2. เก็บข้อมูลย้อนหลังไว้ดูแนวโน้ม
 3. วิเคราะห์ 4 ด้าน: สถิติการวิ่ง (แยก road / trail), การฟื้นตัว (นอน/HRV/RHR), training load และความเสี่ยงบาดเจ็บ, การเตรียมตัวแข่ง
-   และประเมินสภาพอากาศช่วงเวลาที่จะออกซ้อมของวันนั้นจากพยากรณ์จริง (Open-Meteo, หัวข้อ 6.3)
+   และประเมินสภาพอากาศของวันนั้น (04:00–21:00) จากพยากรณ์จริง หาช่วงซ้อมเช้าและเย็นที่ดีที่สุด (Open-Meteo, หัวข้อ 6.3)
 4. ให้ LLM (Claude API เป็นค่าเริ่มต้น หรือ OpenAI) เขียนสรุปและคำแนะนำการวิ่งเป็นภาษาไทย
 5. ส่งสรุปเข้า Discord ผ่าน webhook
 
@@ -39,7 +39,7 @@ garmin-daily/
 ├── .gitignore
 ├── config.py                  # อ่าน env ทั้งหมด
 ├── garmin_fetch.py            # login + ดึงข้อมูล + map field + กรองเฉพาะการวิ่ง
-├── weather.py                 # พยากรณ์อากาศช่วงเวลาซ้อมจาก Open-Meteo + ประเมินความร้อนชื้น/ฝน/ฝุ่น
+├── weather.py                 # พยากรณ์อากาศ 04:00–21:00 จาก Open-Meteo + หาช่วงซ้อมเช้า/เย็นที่ดีที่สุด (ร้อนชื้น/ฝน/ฝุ่น)
 ├── storage.py                 # upsert/query: Supabase Postgres (DATABASE_URL) หรือ SQLite ถ้าไม่ตั้ง
 ├── migrate_to_supabase.py     # คัดลอกข้อมูลจาก SQLite เดิมขึ้น Supabase (รันครั้งเดียว, รันซ้ำได้)
 ├── supabase_dispatch.sql      # ตั้ง pg_cron ใน Supabase ให้สั่งรัน workflow ตรงเวลา (หัวข้อ 12) รันครั้งเดียวใน SQL Editor
@@ -78,7 +78,6 @@ garmin-daily/
 | `BACKFILL_DAYS` | ไม่ | `42` | ใช้เมื่อ DB ว่าง |
 | `REFRESH_DAYS` | ไม่ | `3` | ดึงซ้ำย้อนหลังเผื่อ sync ช้า |
 | `WEATHER_LAT` / `WEATHER_LON` | ไม่ | – | พิกัดที่ใช้ดูพยากรณ์อากาศ (Variables) ถ้าไม่ตั้ง ใช้จุดเริ่มของการวิ่งกลางแจ้งครั้งล่าสุดใน DB ถ้าไม่มีทั้งคู่ให้ข้ามส่วนอากาศ |
-| `RUN_TIME` | ไม่ | `07:00` | เวลาท้องถิ่นที่ออกวิ่ง ใช้กำหนดช่วงพยากรณ์ (ชั่วโมงนั้น + 2 ชั่วโมงถัดไป) |
 
 ตอนรันบนเครื่อง `config.py` อ่านไฟล์ `.env` (git-ignored, ตัวอย่างใน `.env.example`) ด้วย loader แบบ stdlib โดยไม่ทับ env ที่ตั้งไว้แล้ว ใน CI ไม่มีไฟล์นี้
 
@@ -167,15 +166,15 @@ map เป็น: `activity_id` (`activityId`), `date` (10 ตัวแรกข
 - พยากรณ์: `GET https://api.open-meteo.com/v1/forecast` hourly `temperature_2m, relative_humidity_2m, dew_point_2m, apparent_temperature, precipitation_probability, precipitation, weather_code, wind_speed_10m, wind_gusts_10m, uv_index`
 - ฝุ่น: `GET https://air-quality-api.open-meteo.com/v1/air-quality` hourly `pm2_5`
 - ทั้งสองใช้ `latitude`, `longitude`, `timezone=TZ_NAME`, `start_date = end_date = today`, `timeout=15`
-- **ช่วงเวลาซ้อม** = ชั่วโมงของ `RUN_TIME` และอีก 2 ชั่วโมงถัดไป (3 ค่ารายชั่วโมง ครอบคลุมการวิ่งราว 2 ชม.)
+- **ช่วงซ้อม (slot)** = ชั่วโมงเริ่มและอีก 2 ชั่วโมงถัดไป (3 ค่ารายชั่วโมง ครอบคลุมการวิ่งราว 2 ชม.) ระบบลองทุกชั่วโมงเริ่มในช่วงเช้า (04:00–08:00 จบไม่เกิน 10:00) และช่วงเย็น (15:00–19:00 จบไม่เกิน 21:00) แล้วเลือกช่วงที่ดีที่สุดของแต่ละฝั่ง เรียงตาม: ไม่มีพายุฝนฟ้าคะนอง → ไม่เปียก (โอกาสฝน < 60% และฝน < 2 mm) → `heat_score_f` ต่ำ → PM2.5 ต่ำ (เสมอกันเลือกช่วงที่เริ่มก่อน)
 - endpoint ใดล้มเหลวให้ log warning แล้วใช้ `None` ถ้าล้มทั้งคู่ `weather` เป็น `None` และระบบทำงานต่อตามปกติ
 - ดึงอากาศ **เฉพาะรอบที่จะส่งจริง** (รอบที่มาเช็กข้อมูลการนอนแล้วยังไม่ส่ง ไม่ต้องเรียก)
 
-`assess(forecast_hourly, air_hourly, run_time, location_source) -> dict | None` (pure) คืนค่า:
+`assess(forecast, air, day, location_source) -> dict | None` (pure) คืน `{source, location_source, morning, evening, better}` โดย `morning` / `evening` คือ slot ที่ดีที่สุดของแต่ละฝั่ง (หรือ `None` ถ้าไม่มีข้อมูล) และ `better` = `"morning"` หรือ `"evening"` ฝั่งที่ดีกว่าตามลำดับเดียวกัน (เสมอกันเลือกเช้า) คืน `None` ถ้าไม่มี slot ใดมีข้อมูล แต่ละ slot มี:
 
 | key | ความหมาย |
 |---|---|
-| `window` | เช่น `07:00–09:00` |
+| `window` | เช่น `05:00–07:00` |
 | `temp_c`, `temp_max_c`, `feels_like_max_c` | อุณหภูมิตอนเริ่ม, สูงสุด, ความรู้สึกสูงสุดในช่วง |
 | `humidity_pct` | ความชื้นตอนเริ่ม |
 | `dew_point_c` | จุดน้ำค้างสูงสุด |
@@ -275,7 +274,7 @@ list ของ `{level: "red"|"yellow"|"info", message: <ภาษาไทย>}
 | อากาศ: 37.5 < `pm25` ≤ 75 | info |
 | อากาศ: `rain_mm` ≥ 10 หรือ `gust_kmh` ≥ 50 | info — ทางลื่น / ลมแรง |
 
-flag สภาพอากาศไม่เคยเป็น red เพราะ red หมายถึงร่างกายต้องพัก ส่วนอากาศแค่เปลี่ยนรูปแบบการซ้อม
+flag สภาพอากาศประเมินจาก slot ที่ดีกว่า (`weather[weather["better"]]`) เพราะถ้าเลือกเวลาได้ก็ยังต้องเจออากาศแบบนั้น ปัญหาที่เกิดเฉพาะอีกช่วงไม่ขึ้นเป็น flag (เห็นในช่องอากาศและคำแนะนำของช่วงนั้นแทน) และไม่เคยเป็น red เพราะ red หมายถึงร่างกายต้องพัก ส่วนอากาศแค่เปลี่ยนรูปแบบการซ้อม
 
 **ข้อความ flag บอกแค่ว่าเกิดอะไรขึ้นกับเกณฑ์ที่ใช้** ห้ามใส่ค่าที่ช่องตัวเลขใน embed แสดงอยู่แล้ว (ชม.นอน, HRV, RHR, ACWR, %, °C, จุดน้ำค้าง, PM2.5) และห้ามใส่วิธีปรับการซ้อม (อยู่ใน `recommendation`) เพราะการ์ดจะพูดเรื่องเดียวกันซ้ำหลายที่
 
@@ -333,7 +332,8 @@ flag สภาพอากาศไม่เคยเป็น red เพรา�
 |---|---|---|
 | `headline` | วันนี้เป็นวันแบบไหน 1 ประโยค ไม่ไล่เหตุผลที่ flag บอกแล้ว (ถ้า red ขึ้นต้นด้วย ⚠️) | ≤ 80 ตัวอักษร |
 | `session` | ชื่อประเภทการซ้อมวันนี้สั้น ๆ: พัก / Easy run / Long run / Workout / Hill / Trail session | ≤ 40 |
-| `recommendation` | รายละเอียดการซ้อมวันนี้ ระยะหรือเวลาโดยประมาณ และเหตุผล | ≤ 220 |
+| `recommendation` | รายละเอียดการซ้อมวันนี้ ระยะหรือเวลาโดยประมาณ และเหตุผล (ไม่พูดเรื่องอากาศ เพราะอยู่ใน `morning` / `evening`) | ≤ 220 |
+| `morning` / `evening` | ถ้าซ้อม session เดียวกันในช่วงเช้า / เย็นที่ดีที่สุด ควรปรับอย่างไร (ลดความหนัก ดื่มน้ำ เลี่ยงฝน/เทรล ย้ายเข้าลู่) ไม่ทวนตัวเลขพยากรณ์หรือเวลา (`""` ถ้าไม่มี `weather`) | ≤ 100 |
 | `summary` | ภาพรวมย่อหน้าเดียว รวมการฟื้นตัว การวิ่ง 7 วัน โหลด และรายการแข่ง (เฉพาะรายการที่กำหนด phase และรายการที่อยู่ใน mini taper / post race recovery) | ≤ 250 |
 
 - System prompt ต้องกำหนดว่า:
@@ -343,9 +343,9 @@ flag สภาพอากาศไม่เคยเป็น red เพรา�
   - ใช้เฉพาะตัวเลขใน JSON, ข้าม field ที่เป็น null, ห้ามเดา
   - ใช้ Discord markdown ได้ (ตัวหนา, bullet) ไม่ต้องใส่หัวข้อ เพราะการ์ดมีหัวข้ออยู่แล้ว
   - ถ้าสถานะ red ต้องขึ้นต้นด้วยคำเตือนและแนะนำลดหรือพัก
-  - ถ้ามี `weather` ให้ปรับ `recommendation` ตามอากาศช่วงเวลาซ้อม: ร้อนชื้นให้ลดความหนักและดื่มน้ำ (บอกวิธีปรับ ไม่ทวนตัวเลขพยากรณ์ที่ fields แสดงแล้ว), พายุฝนฟ้าคะนองให้เลี่ยงเส้นทางโล่ง/เทรล, PM2.5 สูงให้ย้ายเข้าลู่ พูดถึงอากาศเฉพาะเมื่อเปลี่ยนคำแนะนำ
-- `_compact()` ตัด `weather.location_source`, `source`, `weather_code` ออก
-- fallback ต่อท้าย `recommendation` ด้วยคำเตือนสภาพอากาศเมื่อเข้าเงื่อนไข flag
+  - ถ้ามี `weather` ให้เขียน `morning` / `evening` ตามอากาศของแต่ละช่วง: ร้อนชื้นให้ลดความหนักและดื่มน้ำ, พายุฝนฟ้าคะนองให้เลี่ยงเส้นทางโล่ง/เทรล, PM2.5 สูงให้ย้ายเข้าลู่ (บอกวิธีปรับ ไม่ทวนตัวเลขพยากรณ์ที่ fields แสดงแล้ว)
+- `_compact()` ตัด `weather.location_source`, `source` และ `weather_code` ของแต่ละ slot ออก
+- fallback สร้าง `morning` / `evening` จากระดับร้อนชื้น พายุ และฝุ่นของแต่ละ slot
 - `fallback_sections(result)` สร้าง dict รูปแบบเดียวกันจาก flags และตัวเลขหลักโดยไม่ใช้ LLM
 
 ### 9.1 ความจำคำแนะนำ (กันคำแนะนำซ้ำเดิม)
@@ -366,11 +366,11 @@ flag สภาพอากาศไม่เคยเป็น red เพรา�
 **description** (เรียงตามนี้ ข้ามส่วนที่ว่าง):
 1. `headline`
 2. flags เป็น block quote บรรทัดละรายการ (`> 🔴 ...`)
-3. `**🎯 แนะนำวันนี้ · <session>**` + `recommendation`
+3. `**🎯 แนะนำวันนี้ · <session>**` + `recommendation` ตามด้วย `🌅 **ถ้าซ้อมเช้า <window>**: <morning>` และ `🌇 **ถ้าซ้อมเย็น <window>**: <evening>` (ข้ามบรรทัดที่ว่าง, ⭐ ต่อท้าย window ของฝั่ง `better`)
 4. `**📝 ภาพรวม**` + `summary`
 
 **fields** (ตัวเลขหลัก ไม่ซ้ำกับข้อความ):
-- inline 3 คอลัมน์ แบ่งเป็นกลุ่ม: ฟื้นตัว (HRV, RHR, การนอน, Body battery, Readiness, VO2max) → อากาศช่วงซ้อม (อุณหภูมิ/สภาพ/ลม, ร้อนชื้น + pace ที่ควรช้าลง, ฝน + PM2.5 — ข้ามทั้งกลุ่มถ้าไม่มี `weather`) → วิ่ง (รวม 7 วัน, Road, Trail) → โหลด (ACWR, วันพัก, ซ้อมหนัก)
+- inline 3 คอลัมน์ แบ่งเป็นกลุ่ม: ฟื้นตัว (HRV, RHR, การนอน, Body battery, Readiness, VO2max) → อากาศ 2 ช่อง `🌅 เช้า <window>` / `🌇 เย็น <window>` (⭐ ที่ฝั่ง `better`) แต่ละช่อง: อุณหภูมิ + สภาพ, ระดับร้อนชื้น + pace ที่ควรช้าลง, ฝน + PM2.5 (ข้ามทั้งกลุ่มถ้าไม่มี `weather`) → วิ่ง (รวม 7 วัน, Road, Trail) → โหลด (ACWR, วันพัก, ซ้อมหนัก)
 - ช่อง ACWR ต้องมีทั้งค่า, โซน (สี + คำอธิบายโซน) และ**นิยามย่อ** `โหลด 7 วัน ÷ 28 วัน` กับช่วงปกติ `0.8–1.3` เพราะตัวย่อนี้ไม่สื่อความหมายในตัวเอง
 - **ซ่อนช่องที่ไม่มีข้อมูล** แทนการแสดง `–` (เช่น การนอนของคืนนี้ยังไม่ซิงก์ ให้แสดงค่าเฉลี่ย 7 วันแทนพร้อมบอกว่าเป็นค่าเฉลี่ย) และเติมช่องว่าง (`\u200b`) ให้แต่ละกลุ่มครบแถวละ 3 ช่อง เพื่อไม่ให้กลุ่มปนกัน
 - Road / Trail ที่ไม่มีการวิ่งใน 7 วันให้ข้าม ถ้าไม่มีการวิ่งเลยให้ช่องรวมแสดง `ไม่มีการวิ่ง`
@@ -392,7 +392,7 @@ CLI: `python main.py [--dry-run] [--backfill N] [--date YYYY-MM-DD] [--force]`
 3. จำนวนวันที่ดึง = `--backfill` ถ้าระบุ, ไม่เช่นนั้น `BACKFILL_DAYS` ถ้า DB ว่าง, ไม่เช่นนั้น `REFRESH_DAYS`
 4. ดึง `fetch_runs` ทั้งช่วงแล้ว upsert ก่อน จากนั้นวนดึง `fetch_day` จากวันล่าสุดย้อนหลัง (sleep ระหว่างรอบ) แล้ว upsert — ลำดับนี้ทำให้ถ้าชนเพดาน 250 request ข้อมูลที่สำคัญที่สุดยังได้ครบ
    - ถ้า login ล้มเหลวด้วยเหตุอื่นที่ไม่ใช่ auth (เช่น เน็ต) ให้ log error แล้ววิเคราะห์จากข้อมูลที่มีใน DB และส่งสรุปตามปกติ
-5. อ่านข้อมูล 42 วันจาก DB, ดึงอากาศ (หัวข้อ 6.3 พิกัดจาก `WEATHER_LAT/LON` หรือ `last_run_location()`) → `analyze()`
+5. อ่านข้อมูล 42 วันจาก DB, ดึงอากาศทั้งวัน (หัวข้อ 6.3 พิกัดจาก `WEATHER_LAT/LON` หรือ `last_run_location()`) → `analyze()`
 6. `summarize()` (พร้อม `history` ตามหัวข้อ 9.1) ถ้าล้มเหลวใช้ `fallback_sections()` และ log error
 7. `--dry-run` ให้ print JSON และข้อความ ไม่ส่ง Discord, ไม่เช่นนั้นตรวจเงื่อนไขในหัวข้อ 11.1 แล้วส่ง Discord และบันทึกว่าส่งแล้ว พร้อม session / recommendation ที่ส่ง
 
@@ -422,7 +422,7 @@ CLI: `python main.py [--dry-run] [--backfill N] [--date YYYY-MM-DD] [--force]`
 - **keepalive**: GitHub ปิด scheduled workflow ของ repo public อัตโนมัติเมื่อ repo ไม่มีความเคลื่อนไหว 60 วัน และระบบไม่ commit DB ทุกวันแล้ว จึงมีขั้นสุดท้ายในรอบอัตโนมัติ (`schedule` และ dispatch ที่ `force=false`) ที่เรียก `gh api -X PUT repos/<repo>/actions/workflows/daily.yml/enable` เพื่อต่ออายุ (ต้องใช้ `actions: write`)
 - ขั้นตอน: `actions/checkout@v7` → `actions/setup-python@v7` (3.12, cache pip) — ใช้ major เวอร์ชันที่รันบน Node 24 เพื่อไม่ให้เจอ deprecation warning → `pip install -r requirements.txt` → `python main.py` (ข้อมูลเขียนลง Supabase โดยตรง ไม่ commit ไฟล์ DB กลับ repo แล้ว)
 - secrets: `DATABASE_URL`, `GARMINTOKENS_BASE64`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (ถ้าใช้), `DISCORD_WEBHOOK_URL`
-- variables: `RACES` (JSON ตามหัวข้อ 4.1), และไม่บังคับ `LLM_PROVIDER`, `CLAUDE_MODEL`, `OPENAI_MODEL`, `TRAIL_ELEV_THRESHOLD`, `WEATHER_LAT`, `WEATHER_LON`, `RUN_TIME`
+- variables: `RACES` (JSON ตามหัวข้อ 4.1), และไม่บังคับ `LLM_PROVIDER`, `CLAUDE_MODEL`, `OPENAI_MODEL`, `TRAIL_ELEV_THRESHOLD`, `WEATHER_LAT`, `WEATHER_LON`
 - ถ้าไม่มี secret `DATABASE_URL` ให้ขั้นแรกของ job fail ทันที เพราะ SQLite บน runner หายเมื่อจบ job (ข้อมูลจะไม่สะสม)
 
 ## 13. Dependencies
@@ -449,7 +449,7 @@ psycopg[binary]>=3.2    # Supabase Postgres
   - สัปดาห์ที่ไม่มีการวิ่งเลย และข้อมูลที่เป็น None ไม่ทำให้ crash
   - ผลลัพธ์ `json.dumps` ได้
 - ทดสอบว่า `fetch_runs` กรองกิจกรรมที่ไม่ใช่การวิ่งทิ้ง (ใช้ fake response)
-- `tests/test_weather.py`: ช่วงเวลาซ้อม, ตาราง heat, ระดับ PM2.5, flags สภาพอากาศ, API ล้มเหลวคืน `None` (ไม่ต่อเน็ต)
+- `tests/test_weather.py`: การเลือก slot เช้า/เย็นที่ดีที่สุดและ `better`, ตาราง heat, ระดับ PM2.5, flags สภาพอากาศ, API ล้มเหลวคืน `None` (ไม่ต่อเน็ต)
 - ทดสอบ embed builder ว่าไม่เกินข้อจำกัดของ Discord
 - storage tests รันกับ SQLite เสมอ และรันกับ Postgres ด้วยเมื่อตั้ง `TEST_DATABASE_URL` (เช่น Postgres ใน Docker) ห้ามชี้ไปที่ Supabase จริง เพราะเทสต์ล้างตาราง
 - ก่อนเปิดใช้ cron ต้องรัน `python main.py --dry-run` บนเครื่องให้ผ่านก่อน

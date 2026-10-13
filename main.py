@@ -75,7 +75,7 @@ def fetch_weather(cfg, db: Storage, today: date) -> dict | None:
     else:
         log.info("No weather location (set WEATHER_LAT/WEATHER_LON); skipping weather")
         return None
-    return weather.get_weather(lat, lon, today.isoformat(), cfg.tz_name, cfg.run_time, source)
+    return weather.get_weather(lat, lon, today.isoformat(), cfg.tz_name, source)
 
 
 def main(argv=None) -> int:

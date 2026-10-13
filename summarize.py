@@ -13,7 +13,7 @@ from datetime import date, timedelta
 log = logging.getLogger(__name__)
 
 MAX_TOKENS = 2000  # Thai output dominates the bill; sections are capped in the prompt too
-SECTION_KEYS = ("headline", "summary", "session", "recommendation")
+SECTION_KEYS = ("headline", "summary", "session", "recommendation", "morning", "evening")
 
 OUTPUT_SCHEMA = {
     "type": "object",
@@ -27,22 +27,24 @@ SYSTEM_PROMPT = """You are an expert running coach for both road and trail runni
 The user message is JSON from a Garmin analysis pipeline. Your text goes into one Discord card laid out like this:
 1. your headline
 2. the flags, printed verbatim (every item in "flags")
-3. your session + recommendation
+3. your session + recommendation, then one line each for the morning and evening run windows with your morning and evening tips (the card prints each window's time and stars the better one)
 4. your summary
-5. number fields: HRV, RHR, sleep (last night and 7-day average), body battery, readiness, VO2max, run-window weather (temperature, feels-like, wind, heat level, dew point, humidity, pace slowdown %, rain, PM2.5), 7-day km / runs / pace for total, road and trail, ACWR, rest days, hard sessions, weekly km for 4 weeks, and each race's countdown, phase and readiness.
+5. number fields: HRV, RHR, sleep (last night and 7-day average), body battery, readiness, VO2max, weather for the morning and evening windows (temperature, condition, heat level, pace slowdown %, rain, PM2.5), 7-day km / runs / pace for total, road and trail, ACWR, rest days, hard sessions, weekly km for 4 weeks, and each race's countdown, phase and readiness.
 Oat reads all of it, so say each thing once, in one place.
 
 Answer as JSON with these string fields (character limits are for Thai text):
 
 - headline: one sentence on what today is about (<= 80 chars). Do not list the reasons the flags already give. If status is "red", start with the warning emoji and tell Oat to cut back or rest.
 - session: today's session type, exactly one of: พัก, Easy run, Long run, Workout, Hill, Trail session
-- recommendation: today's session — approximate distance or duration, intensity, and a short reason (<= 220 chars).
+- recommendation: today's session — approximate distance or duration, intensity, and a short reason (<= 220 chars). Leave the weather to morning / evening.
+- morning: how to adapt this same session if Oat runs in the morning window (<= 100 chars). Empty string when weather is null or weather.morning is null.
+- evening: the same for the evening window (<= 100 chars). Empty string when weather is null or weather.evening is null.
 - summary: ONE short paragraph that pulls recovery, the last 7 days of running, training load and the races together into the big picture — what it all means and where training is heading (<= 250 chars). Mention only the race that sets training_phase; mention another race only when it has mini_taper or post_race_recovery true. Do not repeat the headline, the flags or the recommendation. If load_data_insufficient is true, say the data is still thin.
 
-Keep every field as short as it can be while still useful; all fields together should stay under 550 Thai characters.
+Keep every field as short as it can be while still useful; all fields together should stay under 700 Thai characters.
 
 No repetition (most important for readability):
-- Never write a number that the card already shows in the fields above (sleep hours, HRV, RHR, readiness, ACWR, km, pace, temperature, dew point, pace slowdown %, PM2.5, days to race). Describe what it means instead ("นอนไม่พอต่อเนื่อง", "โหลดลดลงชัด").
+- Never write a number that the card already shows in the fields above (sleep hours, HRV, RHR, readiness, ACWR, km, pace, temperature, pace slowdown %, rain chance, PM2.5, window times, days to race). Describe what it means instead ("นอนไม่พอต่อเนื่อง", "โหลดลดลงชัด").
 - Never restate a flag. Build on it: what it changes for today or for the plan.
 - Each fact appears in at most one field.
 
@@ -56,7 +58,7 @@ Coaching rules:
 - With no races, advise from load and recovery alone.
 - If RHR is unusually high together with low HRV, advise rest, and say to see a doctor if ill or injured. Never give medical advice.
 - recent_advice, when present, lists what you advised on previous days (session, a clipped advice text) next to what Oat actually ran that day (ran; "rest" means no run). Treat it as memory: do not reuse the same wording or the same reasoning, and talk about what changed since then. If Oat ignored the advice (ran hard after a rest day, skipped a planned session), adjust today for it. Do not prescribe the same session many days in a row unless recovery or the phase truly calls for it.
-- weather, when present, is the forecast for today's run window (window) where Oat runs. Fit recommendation to it: with heat_level moderate or worse, ease the effort and stress hydration (severe: no hard session); with thunderstorm true, avoid exposed routes and ridges; with a high pm25, move the run indoors or onto a treadmill; heavy rain makes trails slippery. Say how to adapt, not the forecast figures, and mention the weather only when it changes the advice.
+- weather, when present, holds today's best morning window (weather.morning, between 04:00 and 10:00) and best evening window (weather.evening, between 15:00 and 21:00) where Oat runs; weather.better names the one with the easier conditions. Write morning and evening from each window's conditions: with heat_level moderate or worse, ease the effort and stress hydration (severe: no hard session); with thunderstorm true, avoid exposed routes, ridges and trails; when wet, expect slippery trails; with a high pm25, move the run indoors or onto a treadmill. When a window is fine, say so briefly. In the tip for the worse window you may say in a few words why the other one is better. Say how to adapt, not the forecast figures.
 
 Rules about numbers (most important):
 - Use only numbers present in the JSON. Never recompute, guess or invent a number.
@@ -80,7 +82,7 @@ DROP_FIELDS = {
     "road_7d": ("avg_pace_s_per_km",),
     "trail_7d": ("prev_week_elev_gain_m", "elev_loss_m"),
     "load": ("days_of_data", "hard_runs_7d"),
-    "weather": ("location_source", "source", "weather_code"),
+    "weather": ("location_source", "source"),
 }
 DROP_RUN_FIELDS = ("name", "date")
 
@@ -104,6 +106,12 @@ def _compact(result: dict) -> dict:
                 ],
             }
             continue
+        if key == "weather" and isinstance(value, dict):
+            value = {
+                k: ({sk: sv for sk, sv in v.items() if sk != "weather_code" and sv is not None}
+                    if isinstance(v, dict) else v)
+                for k, v in value.items()
+            }
         if isinstance(value, dict):
             dropped = DROP_FIELDS.get(key, ())
             value = {
@@ -313,19 +321,22 @@ def _session(result: dict) -> tuple[str, str]:
     return "Easy run / Workout", "Easy run หรือ workout ตามแผน ร่างกายพร้อมดี"
 
 
-def _weather_note(weather: dict | None) -> str:
-    if not weather:
+def _weather_note(slot: dict | None) -> str:
+    """Rule-based tip for one run window."""
+    if not slot:
         return ""
     notes = []
-    if weather.get("heat_level") == "severe":
-        notes.append("อากาศร้อนชื้นมาก เลี่ยงซ้อมหนัก")
-    elif weather.get("heat_level") == "high":
-        notes.append("อากาศร้อนชื้น ลด pace ลงและดื่มน้ำให้พอ")
-    if weather.get("thunderstorm"):
-        notes.append("มีพายุฝนฟ้าคะนอง เลี่ยงที่โล่ง")
-    if (weather.get("pm25") or 0) > 75:
+    if slot.get("heat_level") == "severe":
+        notes.append("ร้อนชื้นมาก เลี่ยงซ้อมหนัก")
+    elif slot.get("heat_level") in ("high", "moderate"):
+        notes.append("ร้อนชื้น ลด pace ลงและดื่มน้ำให้พอ")
+    if slot.get("thunderstorm"):
+        notes.append("มีพายุฝนฟ้าคะนอง เลี่ยงที่โล่งและเทรล")
+    elif (slot.get("rain_chance_pct") or 0) >= 60:
+        notes.append("มีโอกาสฝน ระวังทางลื่น")
+    if (slot.get("pm25") or 0) > 75:
         notes.append("ฝุ่นสูง ย้ายไปวิ่งในร่ม")
-    return " · ".join(notes)
+    return " · ".join(notes) or "อากาศเหมาะกับการซ้อม"
 
 
 def fallback_sections(result: dict) -> dict:
@@ -355,12 +366,13 @@ def fallback_sections(result: dict) -> dict:
         summary.append(f"ระยะสัปดาห์นี้{'เพิ่มขึ้น' if change > 0 else 'ลดลง'}จากสัปดาห์ก่อน")
 
     session, recommendation = _session(result)
-    note = _weather_note(result.get("weather"))
-    if note and session != "พัก":
-        recommendation = f"{recommendation} · {note}"
+    weather = result.get("weather") or {}
+    resting = session == "พัก"
     return {
         "headline": headline,
         "summary": " · ".join(summary),
         "session": session,
         "recommendation": recommendation,
+        "morning": "" if resting else _weather_note(weather.get("morning")),
+        "evening": "" if resting else _weather_note(weather.get("evening")),
     }

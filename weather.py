@@ -1,4 +1,4 @@
-"""Weather for today's run window from Open-Meteo (free, no API key). See CLAUDE.md §6.3.
+"""Weather for today's best morning and evening run windows from Open-Meteo (free, no API key). See CLAUDE.md §6.3.
 
 `fetch_hourly()` does the network calls; `assess()` is pure and stdlib-only.
 """
@@ -25,6 +25,10 @@ FORECAST_HOURLY = (
 )
 TIMEOUT_S = 15
 WINDOW_HOURS = 3  # the start hour and the two after it: covers a run of about 2 hours
+MORNING_STARTS = range(4, 9)  # 04:00–06:00 … 08:00–10:00
+EVENING_STARTS = range(15, 20)  # 15:00–17:00 … 19:00–21:00
+WET_CHANCE_PCT = 60
+WET_MM = 2.0
 SOURCE = "Open-Meteo"
 
 # temp °F + dew point °F → (pace slowdown % min, max, heat_level). None means hard running is not advised.
@@ -88,17 +92,6 @@ def _f(celsius: float) -> float:
     return celsius * 9 / 5 + 32
 
 
-def _start_hour(run_time: str) -> int:
-    try:
-        hour = int(str(run_time).split(":")[0])
-    except ValueError:
-        hour = -1
-    if not 0 <= hour <= 23:
-        log.warning("RUN_TIME=%r is not HH:MM; using 07:00", run_time)
-        return 7
-    return hour
-
-
 def _window(hourly: dict | None, day: str, hours: list[int]) -> dict[str, list]:
     """Values of each hourly variable at the given hours of `day` (missing hours are skipped)."""
     if not isinstance(hourly, dict) or not isinstance(hourly.get("time"), list):
@@ -141,13 +134,11 @@ def pm25_level(pm25):
     return PM25_UNHEALTHY
 
 
-def assess(forecast: dict | None, air: dict | None, day: str, run_time: str = "07:00",
-           location_source: str | None = None) -> dict | None:
-    """Summarize Open-Meteo hourly data over the run window. None when there is nothing usable."""
-    start = _start_hour(run_time)
-    hours = [h for h in range(start, start + WINDOW_HOURS) if h <= 23]
-    fw = _window((forecast or {}).get("hourly"), day, hours)
-    aw = _window((air or {}).get("hourly"), day, hours)
+def _slot(fh: dict | None, ah: dict | None, day: str, start: int) -> dict | None:
+    """Summary of one run window starting at `start`. None when it has no data."""
+    hours = list(range(start, start + WINDOW_HOURS))
+    fw = _window(fh, day, hours)
+    aw = _window(ah, day, hours)
     if not any(fw.values()) and not any(aw.values()):
         return None
 
@@ -157,10 +148,7 @@ def assess(forecast: dict | None, air: dict | None, day: str, run_time: str = "0
     code = _max([int(c) for c in fw.get("weather_code", [])])
     rain = fw.get("precipitation", [])
     pm25 = _max(aw.get("pm2_5", []))
-
     return {
-        "source": SOURCE,
-        "location_source": location_source,
         "window": f"{hours[0]:02d}:00–{hours[-1]:02d}:00",
         "temp_c": _r(_first(fw.get("temperature_2m", []))),
         "temp_max_c": _r(temp_max),
@@ -181,6 +169,37 @@ def assess(forecast: dict | None, air: dict | None, day: str, run_time: str = "0
         "heat_level": heat_level,
         "pace_slowdown_pct_min": slow_lo,
         "pace_slowdown_pct_max": slow_hi,
+    }
+
+
+def _rank(slot: dict) -> tuple:
+    """Lower is better: storms first, then rain, then heat, then dust."""
+    wet = (slot["rain_chance_pct"] or 0) >= WET_CHANCE_PCT or (slot["rain_mm"] or 0) >= WET_MM
+    return (bool(slot["thunderstorm"]), wet, slot["heat_score_f"] or 0, slot["pm25"] or 0)
+
+
+def _best(fh, ah, day: str, starts) -> dict | None:
+    slots = [s for s in (_slot(fh, ah, day, h) for h in starts) if s]
+    return min(slots, key=_rank) if slots else None  # min() keeps the earliest on ties
+
+
+def assess(forecast: dict | None, air: dict | None, day: str, location_source: str | None = None) -> dict | None:
+    """Best morning and evening run windows of the day. None when there is nothing usable."""
+    fh, ah = (forecast or {}).get("hourly"), (air or {}).get("hourly")
+    morning = _best(fh, ah, day, MORNING_STARTS)
+    evening = _best(fh, ah, day, EVENING_STARTS)
+    if not morning and not evening:
+        return None
+    if morning and evening:
+        better = "morning" if _rank(morning) <= _rank(evening) else "evening"
+    else:
+        better = "morning" if morning else "evening"
+    return {
+        "source": SOURCE,
+        "location_source": location_source,
+        "better": better,
+        "morning": morning,
+        "evening": evening,
     }
 
 
@@ -209,14 +228,17 @@ def fetch_hourly(lat: float, lon: float, day: str, tz_name: str) -> tuple[dict |
     return forecast, air
 
 
-def get_weather(lat: float, lon: float, day: str, tz_name: str, run_time: str = "07:00",
-                location_source: str | None = None) -> dict | None:
+def get_weather(lat: float, lon: float, day: str, tz_name: str, location_source: str | None = None) -> dict | None:
     forecast, air = fetch_hourly(lat, lon, day, tz_name)
-    result = assess(forecast, air, day, run_time, location_source)
+    result = assess(forecast, air, day, location_source)
     if result:
-        log.info(
-            "Weather %s %s: %s°C dew %s°C, rain %s%%, PM2.5 %s, heat %s",
-            day, result["window"], result["temp_max_c"], result["dew_point_c"],
-            result["rain_chance_pct"], result["pm25"], result["heat_level"],
-        )
+        for key in ("morning", "evening"):
+            slot = result[key]
+            if slot:
+                log.info(
+                    "Weather %s %s %s: %s°C dew %s°C, rain %s%%, PM2.5 %s, heat %s",
+                    day, key, slot["window"], slot["temp_max_c"], slot["dew_point_c"],
+                    slot["rain_chance_pct"], slot["pm25"], slot["heat_level"],
+                )
+        log.info("Weather %s: better window is %s", day, result["better"])
     return result

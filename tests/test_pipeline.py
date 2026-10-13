@@ -223,10 +223,10 @@ class LocationTests(unittest.TestCase):
     def test_weather_coordinates_from_env(self):
         import config
 
-        with mock.patch.dict(os.environ, {"WEATHER_LAT": "13.75", "WEATHER_LON": "100.5", "RUN_TIME": "06:00"}), \
+        with mock.patch.dict(os.environ, {"WEATHER_LAT": "13.75", "WEATHER_LON": "100.5"}), \
                 mock.patch("config.load_dotenv"):
             cfg = config.load_config()
-        self.assertEqual((cfg.weather_lat, cfg.weather_lon, cfg.run_time), (13.75, 100.5, "06:00"))
+        self.assertEqual((cfg.weather_lat, cfg.weather_lon), (13.75, 100.5))
         with mock.patch.dict(os.environ, {"WEATHER_LAT": "north", "WEATHER_LON": "200"}), \
                 mock.patch("config.load_dotenv"), self.assertLogs("config", "WARNING"):
             cfg = config.load_config()
@@ -396,6 +396,7 @@ def sections(**overrides):
         "headline": "วันนี้ร่างกายพร้อม", "summary": "ฟื้นตัวดี วิ่งสม่ำเสมอ โหลดเหมาะกับช่วง Build ของ Uthai",
         "session": "Easy run",
         "recommendation": "Easy run 45 นาที โซน 2",
+        "morning": "", "evening": "",
     }
     base.update(overrides)
     return base
@@ -833,7 +834,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.forecast.assert_called_once_with(13.76, 100.5, "2026-09-20", "Asia/Bangkok")
         result = send.call_args.args[1]
-        self.assertEqual(result["weather"]["heat_level"], "high")
+        self.assertEqual(result["weather"]["morning"]["heat_level"], "high")
         self.assertEqual(result["weather"]["location_source"], "last_run")
 
     def test_weather_location_from_config_wins(self):

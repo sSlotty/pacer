@@ -49,7 +49,6 @@ jobs:
           SEND_DEADLINE: ${{ vars.SEND_DEADLINE }}
           WEATHER_LAT: ${{ vars.WEATHER_LAT }}
           WEATHER_LON: ${{ vars.WEATHER_LON }}
-          RUN_TIME: ${{ vars.RUN_TIME }}
         run: |
           # Without Supabase the SQLite file would vanish with the runner and history would never accumulate.
           if [ -z "$DATABASE_URL" ]; then

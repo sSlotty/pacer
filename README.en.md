@@ -43,8 +43,9 @@ Each day is a single dashboard-style embed whose colour shows the day's status.
 | Section | Content |
 |---|---|
 | Header | Date in Thai and status: 🟢 ready to train · 🟡 train with care · 🔴 rest |
-| Warnings | Every condition that triggered, e.g. high ACWR, short sleep, a thunderstorm during your run |
-| 🎯 Today's plan | Session type, approximate distance or duration, and the reason |
+| Warnings | Every condition that triggered, e.g. high ACWR, short sleep, a thunderstorm even in the best window |
+| 🎯 Today's plan | Session type, approximate distance or duration, the reason, and how to adapt it for a morning 🌅 or evening 🌇 run (⭐ = the window with better weather) |
+| 📝 Overview | One paragraph tying together recovery, running, load and races |
 | Key numbers | Recovery → weather → running → load, in groups of three |
 | Races | Days to go, training phase and a readiness bar `▰▰▰▱▱` |
 | Weekly chart | Distance over the last 4 weeks |
@@ -70,7 +71,7 @@ Supabase pg_cron triggers GitHub Actions every 15 minutes from **04:00 to 06:45*
 3. Data is ready, or `SEND_DEADLINE` (06:45) has passed → analyse and post with whatever is available
 
 > [!TIP]
-> pg_cron is the main trigger because GitHub's cron can start hours late and often skips runs (the cron in [`daily.yml`](.github/workflows/daily.yml) stays as a backup). If you run at a different time, change `SEND_DEADLINE`, `RUN_TIME` and the schedule in [`supabase_dispatch.sql`](supabase_dispatch.sql) (cron uses UTC = Bangkok time − 7 h).
+> pg_cron is the main trigger because GitHub's cron can start hours late and often skips runs (the cron in [`daily.yml`](.github/workflows/daily.yml) stays as a backup). If you run at a different time, change `SEND_DEADLINE` and the schedule in [`supabase_dispatch.sql`](supabase_dispatch.sql) (cron uses UTC = Bangkok time − 7 h).
 
 <details>
 <summary><b>Project Structure</b></summary>
@@ -79,7 +80,7 @@ Supabase pg_cron triggers GitHub Actions every 15 minutes from **04:00 to 06:45*
 |---|---|
 | [`main.py`](main.py) | Orchestrator and CLI |
 | [`garmin_fetch.py`](garmin_fetch.py) | Token login, data fetching, keeps running activities only |
-| [`weather.py`](weather.py) | Forecast for the run window; assesses heat, rain and air quality |
+| [`weather.py`](weather.py) | Forecast for 04:00–21:00; finds the best morning and evening windows by heat, rain and air quality |
 | [`analysis.py`](analysis.py) | Metrics, flags and race phase (pure function, stdlib only) |
 | [`summarize.py`](summarize.py) | Calls Claude / OpenAI and builds the fallback text |
 | [`discord_notify.py`](discord_notify.py) | Builds the embed and posts the webhook |
@@ -179,7 +180,6 @@ Set these as GitHub **Variables** (or in `.env` for local runs). All are optiona
 | `LLM_PROVIDER` | `anthropic` | Order of AI providers to try, e.g. `openai,anthropic` (providers without a key are skipped) |
 | `CLAUDE_MODEL` | `claude-sonnet-5` | |
 | `OPENAI_MODEL` | `gpt-5.4-mini` | |
-| `RUN_TIME` | `07:00` | When you start running; the forecast covers that hour and the next two |
 | `SEND_DEADLINE` | `06:45` | Latest time to post, even if sleep data has not synced |
 | `WEATHER_LAT` / `WEATHER_LON` | – | Forecast location; defaults to where your last outdoor run started |
 | `TRAIL_ELEV_THRESHOLD` | `20` | m/km above which an `ultra_run` counts as trail |
@@ -226,11 +226,11 @@ Set these as GitHub **Variables** (or in `.env` for local runs). All are optiona
 
 ### Weather
 
-Pacer reads the hourly Open-Meteo forecast for your `RUN_TIME`. It is free and needs no API key.
+Pacer reads the hourly Open-Meteo forecast for the whole day (04:00–21:00). It is free and needs no API key. It then picks the best 2-hour run window in the morning (04:00–10:00) and in the evening (15:00–21:00), ranking storms first, then rain, heat and air quality.
 
 - **Heat and humidity** combine temperature and dew point (°F) into the expected pace slowdown, so you don't chase your normal pace on a hot, humid day
 - **PM2.5** is graded on Thailand's Pollution Control Department scale
-- Strong heat, a thunderstorm or PM2.5 above 75 µg/m³ raises a yellow warning, and the AI adapts the session, e.g. easing off, avoiding exposed routes or moving to a treadmill
+- Yellow warnings use the better window: they appear when even that window is very hot and humid, stormy or above 75 µg/m³ PM2.5. The AI says how to adapt for each window, e.g. easing off, avoiding exposed routes or moving to a treadmill
 - Weather never turns the status red, because red means your body needs rest
 
 ## CLI Usage

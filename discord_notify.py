@@ -100,7 +100,12 @@ def _description(result: dict, sections: dict) -> str:
 
     if sections.get("recommendation"):
         session = _clip(sections.get("session") or "แผนวันนี้", 60)
-        parts.append(f"**🎯 แนะนำวันนี้ · {session}**\n{sections['recommendation']}")
+        block = [f"**🎯 แนะนำวันนี้ · {session}**", sections["recommendation"]]
+        weather = result.get("weather") or {}
+        for key, icon, label in SLOTS:
+            if sections.get(key) and weather.get(key):
+                block.append(f"{icon} **ถ้าซ้อม{label} {_slot_label(weather, key)}**: {sections[key]}")
+        parts.append("\n".join(block))
 
     if sections.get("summary"):
         parts.append(f"**📝 ภาพรวม**\n{sections['summary']}\n")
@@ -175,50 +180,51 @@ def _weather_icon(code) -> str:
     return {0: "☀️", 1: "🌤️", 2: "⛅"}.get(code, "☁️")
 
 
+SLOTS = (("morning", "🌅", "เช้า"), ("evening", "🌇", "เย็น"))
+
+
+def _slot_label(w: dict, key: str) -> str:
+    window = (w.get(key) or {}).get("window", "")
+    star = " ⭐" if w.get("better") == key else ""
+    return f"{window}{star}".strip()
+
+
+def _slot_value(slot: dict) -> str:
+    lines = []
+    if slot.get("temp_c") is not None:
+        temp = _num(slot["temp_c"])
+        if slot.get("temp_max_c") is not None and slot["temp_max_c"] != slot["temp_c"]:
+            temp += f"–{_num(slot['temp_max_c'])}"
+        line = f"{_weather_icon(slot.get('weather_code'))} **{temp}°C**"
+        if slot.get("condition"):
+            line += f" · {slot['condition']}"
+        lines.append(line)
+    if slot.get("heat_level"):
+        line = HEAT_LABEL.get(slot["heat_level"], slot["heat_level"])
+        if slot.get("pace_slowdown_pct_max"):
+            line += f"\npace ช้าลง ~{_num(slot['pace_slowdown_pct_min'])}–{_num(slot['pace_slowdown_pct_max'])}%"
+        lines.append(line)
+    extra = []
+    if slot.get("rain_chance_pct") is not None:
+        rain = f"ฝน {_num(slot['rain_chance_pct'])}%"
+        if slot.get("rain_mm"):
+            rain += f" ({_num(slot['rain_mm'])} mm)"
+        extra.append(rain)
+    if slot.get("pm25") is not None:
+        extra.append(f"PM2.5 {_num(slot['pm25'])} {slot.get('pm25_level') or ''}".rstrip())
+    if extra:
+        lines.append(" · ".join(extra))
+    return "\n".join(lines)
+
+
 def _weather_fields(w: dict | None) -> list[dict]:
     if not w:
         return []
     fields = []
-
-    lines = []
-    if w.get("temp_c") is not None:
-        temp = _num(w["temp_c"])
-        if w.get("temp_max_c") is not None and w["temp_max_c"] != w["temp_c"]:
-            temp += f"–{_num(w['temp_max_c'])}"
-        line = f"**{temp}°C**"
-        if w.get("feels_like_max_c") is not None:
-            line += f" · รู้สึก {_num(w['feels_like_max_c'])}°C"
-        lines.append(line)
-    if w.get("condition"):
-        lines.append(w["condition"])
-    if w.get("wind_kmh") is not None:
-        lines.append(f"ลม {_num(w['wind_kmh'])} km/h")
-    if lines:
-        fields.append(_field(f"{_weather_icon(w.get('weather_code'))} อากาศ {w.get('window', '')}".strip(), "\n".join(lines)))
-
-    if w.get("heat_level"):
-        lines = [HEAT_LABEL.get(w["heat_level"], w["heat_level"])]
-        if w.get("pace_slowdown_pct_max"):
-            lines.append(f"pace ช้าลง ~{_num(w['pace_slowdown_pct_min'])}–{_num(w['pace_slowdown_pct_max'])}%")
-        humid = []
-        if w.get("dew_point_c") is not None:
-            humid.append(f"จุดน้ำค้าง {_num(w['dew_point_c'])}°C")
-        if w.get("humidity_pct") is not None:
-            humid.append(f"ชื้น {_num(w['humidity_pct'])}%")
-        if humid:
-            lines.append(" · ".join(humid))
-        fields.append(_field("💦 ร้อนชื้น", "\n".join(lines)))
-
-    lines = []
-    if w.get("rain_chance_pct") is not None:
-        line = f"ฝน **{_num(w['rain_chance_pct'])}%**"
-        if w.get("rain_mm"):
-            line += f" · {_num(w['rain_mm'])} mm"
-        lines.append(line)
-    if w.get("pm25") is not None:
-        lines.append(f"PM2.5 **{_num(w['pm25'])}** · {w.get('pm25_level') or ''}".rstrip(" ·"))
-    if lines:
-        fields.append(_field("🌧️ ฝน · 😷 ฝุ่น", "\n".join(lines)))
+    for key, icon, label in SLOTS:
+        slot = w.get(key)
+        if slot:
+            fields.append(_field(f"{icon} {label} {_slot_label(w, key)}", _slot_value(slot)))
     return _row(fields)
 
 

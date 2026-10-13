@@ -173,7 +173,6 @@ class Config:
     refresh_days: int = 3
     weather_lat: float | None = None
     weather_lon: float | None = None
-    run_time: str = "07:00"
 
 
 def load_dotenv(path: str = ".env") -> None:
@@ -216,5 +215,4 @@ def load_config() -> Config:
         refresh_days=_env_int("REFRESH_DAYS", 3),
         weather_lat=_env_coord("WEATHER_LAT", 90),
         weather_lon=_env_coord("WEATHER_LON", 180),
-        run_time=os.getenv("RUN_TIME") or "07:00",
     )

@@ -434,25 +434,31 @@ def _weather_flags(weather):
     """Weather changes how to train, never whether the body needs rest, so no red here (§8.5)."""
     if not weather:
         return []
+    # Judge the better of the two windows: the run time is a choice, so only what cannot be avoided is a flag.
+    slot = weather.get(weather.get("better") or "") or {}
+    if not slot:
+        return []
     flags = []
-    window = weather.get("window") or "ช่วงซ้อม"
-    heat_level = weather.get("heat_level")
-    # Temperatures, dew point and the pace range are in the weather fields; how to adapt is in the recommendation.
+    window = slot.get("window") or "ช่วงซ้อม"
+    heat_level = slot.get("heat_level")
+    # Temperatures, dew point and the pace range are in the weather fields; how to adapt is in the tips.
     if heat_level == "severe":
-        flags.append({"level": "yellow", "message": f"ร้อนชื้นรุนแรงช่วง {window} เลี่ยงซ้อมหนัก"})
+        flags.append({"level": "yellow", "message": f"ร้อนชื้นรุนแรงแม้ช่วงที่ดีที่สุด ({window}) เลี่ยงซ้อมหนัก"})
     elif heat_level == "high":
-        flags.append({"level": "yellow", "message": f"ร้อนชื้นมากช่วง {window}"})
-    if weather.get("thunderstorm"):
-        flags.append({"level": "yellow", "message": f"พายุฝนฟ้าคะนองช่วง {window} ระวังฟ้าผ่า เลี่ยงที่โล่งและสันเขา"})
-    pm25 = weather.get("pm25")
+        flags.append({"level": "yellow", "message": f"ร้อนชื้นมากแม้ช่วงที่ดีที่สุด ({window})"})
+    if slot.get("thunderstorm"):
+        flags.append(
+            {"level": "yellow", "message": f"พายุฝนฟ้าคะนองแม้ช่วงที่ดีที่สุด ({window}) ระวังฟ้าผ่า เลี่ยงที่โล่งและสันเขา"}
+        )
+    pm25 = slot.get("pm25")
     if pm25 is not None and pm25 > 75:
         flags.append({"level": "yellow", "message": "ฝุ่น PM2.5 มีผลต่อสุขภาพ ควรวิ่งในร่มหรือบนลู่"})
     elif pm25 is not None and pm25 > 37.5:
         flags.append({"level": "info", "message": "ฝุ่น PM2.5 เริ่มมีผลต่อสุขภาพ"})
-    if (weather.get("rain_mm") or 0) >= 10:
+    if (slot.get("rain_mm") or 0) >= 10:
         flags.append({"level": "info", "message": f"ฝนหนักช่วง {window} ทางลื่น โดยเฉพาะเทรล"})
-    if (weather.get("gust_kmh") or 0) >= 50:
-        flags.append({"level": "info", "message": f"ลมกระโชกแรง {weather['gust_kmh']:g} km/h"})
+    if (slot.get("gust_kmh") or 0) >= 50:
+        flags.append({"level": "info", "message": f"ลมกระโชกแรง {slot['gust_kmh']:g} km/h"})
     return flags
 
 
