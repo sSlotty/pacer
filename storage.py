@@ -62,6 +62,9 @@ NOTIFICATION_COLUMNS = {
     "sent_at": "TEXT",
     "source": "TEXT",
     "status": "TEXT",
+    # what was advised, so the next day's summary can avoid repeating itself
+    "session": "TEXT",
+    "recommendation": "TEXT",
 }
 
 
@@ -164,14 +167,29 @@ class Storage:
         row = self._exec("SELECT 1 FROM notifications WHERE date = ?", (day,)).fetchone()
         return row is not None
 
-    def mark_sent(self, day: str, source: str | None, status: str | None) -> None:
+    def mark_sent(self, day: str, source: str | None, status: str | None, sections: dict | None = None) -> None:
+        sections = sections or {}
         self._exec(
-            "INSERT INTO notifications (date, sent_at, source, status) VALUES (?, ?, ?, ?) "
+            "INSERT INTO notifications (date, sent_at, source, status, session, recommendation) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(date) DO UPDATE SET sent_at = excluded.sent_at, "
-            "source = excluded.source, status = excluded.status",
-            (day, datetime.now(timezone.utc).isoformat(timespec="seconds"), source or "fallback", status),
+            "source = excluded.source, status = excluded.status, "
+            "session = excluded.session, recommendation = excluded.recommendation",
+            (
+                day, datetime.now(timezone.utc).isoformat(timespec="seconds"), source or "fallback", status,
+                sections.get("session") or None, sections.get("recommendation") or None,
+            ),
         )
         self.conn.commit()
+
+    def recent_notes(self, since: str, before: str) -> list[dict]:
+        """Advice sent on days since <= date < before, oldest first."""
+        cur = self._exec(
+            "SELECT date, session, recommendation FROM notifications "
+            "WHERE date >= ? AND date < ? ORDER BY date",
+            (since, before),
+        )
+        return [dict(r) for r in cur]
 
     def close(self) -> None:
         self.conn.close()

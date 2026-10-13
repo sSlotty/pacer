@@ -281,6 +281,16 @@ class StorageContract:
         row = self.db._exec("SELECT source, status FROM notifications WHERE date = ?", ("2026-09-20",)).fetchone()
         self.assertEqual((row["source"], row["status"]), ("Claude", "yellow"))
 
+    def test_notifications_remember_advice(self):
+        self.db.mark_sent("2026-09-18", "Claude", "green", sections(session="Hill", recommendation="ขึ้นเนิน 6 รอบ"))
+        self.db.mark_sent("2026-09-19", None, "yellow")  # no sections: memory columns stay empty
+        self.db.mark_sent("2026-09-20", "Claude", "green", sections())
+        notes = self.db.recent_notes("2026-09-18", "2026-09-20")
+        self.assertEqual(notes, [
+            {"date": "2026-09-18", "session": "Hill", "recommendation": "ขึ้นเนิน 6 รอบ"},
+            {"date": "2026-09-19", "session": None, "recommendation": None},
+        ])
+
     def test_reopen_keeps_data(self):
         self.db.upsert_daily({"date": "2026-09-20", "resting_hr": 50})
         self.db.close()
@@ -383,8 +393,8 @@ def sample_result(races=True):
 
 def sections(**overrides):
     base = {
-        "headline": "วันนี้ร่างกายพร้อม", "recovery": "HRV ปกติ", "running": "วิ่งสม่ำเสมอ",
-        "load": "โหลดเหมาะสม", "races": "อีก 60 วันถึง Uthai", "session": "Easy run",
+        "headline": "วันนี้ร่างกายพร้อม", "summary": "ฟื้นตัวดี วิ่งสม่ำเสมอ โหลดเหมาะกับช่วง Build ของ Uthai",
+        "session": "Easy run",
         "recommendation": "Easy run 45 นาที โซน 2",
     }
     base.update(overrides)
@@ -416,9 +426,10 @@ class DiscordTests(unittest.TestCase):
         desc = embed["description"]
         self.assertTrue(desc.startswith("วันนี้ร่างกายพร้อม"))
         self.assertIn("**🎯 แนะนำวันนี้ · Easy run**\nEasy run 45 นาที โซน 2", desc)
-        for heading in ("🛌 การฟื้นตัว", "🏃 การวิ่ง 7 วัน", "📈 โหลด", "🏁 รายการแข่ง"):
-            self.assertIn(f"**{heading}**", desc)
-        self.assertLess(desc.index("แนะนำวันนี้"), desc.index("การฟื้นตัว"))
+        self.assertIn("**📝 ภาพรวม**\nฟื้นตัวดี", desc)
+        for old in ("การฟื้นตัว**", "การวิ่ง 7 วัน**", "โหลด**", "รายการแข่ง**"):
+            self.assertNotIn(old, desc)  # merged into one overview paragraph
+        self.assertLess(desc.index("แนะนำวันนี้"), desc.index("ภาพรวม"))
         self.assertIn("สรุปโดย Claude", embed["footer"]["text"])
         self.assertIn("timestamp", embed)
         chatgpt = discord_notify.build_embed(sample_result(), sections(), source="ChatGPT")
@@ -525,12 +536,52 @@ class DiscordTests(unittest.TestCase):
         self.assertEqual(fake_requests.post.call_args.kwargs["timeout"], 20)
 
 
+class AdviceHistoryTests(unittest.TestCase):
+    def test_pairs_advice_with_what_was_run(self):
+        notes = [
+            {"date": "2026-09-17", "session": "พัก", "recommendation": "**พัก** เดินเบา ๆ"},
+            {"date": "2026-09-18", "session": "Hill", "recommendation": "ขึ้นเนิน " + "ก" * 200},
+            {"date": "2026-09-19", "session": None, "recommendation": None},
+        ]
+        runs = [
+            {"date": "2026-09-17", "run_category": "road", "distance_m": 15000.0, "elev_gain_m": 50.0},
+            {"date": "2026-09-18", "run_category": "trail", "distance_m": 12000.0, "elev_gain_m": 640.0},
+            {"date": "2026-09-18", "run_category": "road", "distance_m": 3000.0, "elev_gain_m": None},
+            {"date": "2026-09-20", "run_category": "road", "distance_m": 9000.0, "elev_gain_m": 10.0},
+        ]
+        rows = summarize.advice_history(notes, runs, date(2026, 9, 20))
+        self.assertEqual([r["date"] for r in rows], ["2026-09-17", "2026-09-18"])  # skips empty notes
+        self.assertEqual(rows[0], {"date": "2026-09-17", "session": "พัก", "ran": "road 15.0km",
+                                   "advice": "พัก เดินเบา ๆ"})
+        self.assertEqual(rows[1]["ran"], "road 3.0km+trail 12.0km D+640")
+        self.assertLessEqual(len(rows[1]["advice"]), summarize.ADVICE_CHARS)
+
+    def test_rest_day_and_window(self):
+        notes = [{"date": "2026-09-01", "session": "Easy run", "recommendation": "เก่าเกินไป"},
+                 {"date": "2026-09-19", "session": "Easy run", "recommendation": "วิ่งเบา"},
+                 {"date": "2026-09-20", "session": "Long run", "recommendation": "วันนี้เอง"}]
+        rows = summarize.advice_history(notes, [], date(2026, 9, 20))
+        self.assertEqual(rows, [{"date": "2026-09-19", "session": "Easy run", "ran": "rest", "advice": "วิ่งเบา"}])
+
+    def test_user_message_includes_history_only_when_present(self):
+        result = sample_result(races=False)
+        self.assertNotIn("recent_advice", summarize._user_message(result))
+        history = [{"date": "2026-09-19", "session": "Hill", "ran": "rest", "advice": "ขึ้นเนิน, 6 รอบ"}]
+        payload = json.loads(summarize._user_message(result, history).split("\n", 1)[1])
+        self.assertEqual(payload["recent_advice"]["columns"], "date,session,ran,advice")
+        self.assertEqual(payload["recent_advice"]["rows"], ["2026-09-19,Hill,rest,ขึ้นเนิน 6 รอบ"])
+        self.assertNotIn("recent_advice", result)  # analysis result untouched
+
+    def test_prompt_mentions_recent_advice(self):
+        self.assertIn("recent_advice", summarize.SYSTEM_PROMPT)
+
+
 class FallbackTests(unittest.TestCase):
     def test_fallback_has_all_sections(self):
         out = summarize.fallback_sections(sample_result())
         self.assertEqual(set(out), set(summarize.SECTION_KEYS))
         self.assertTrue(out["headline"] and out["recommendation"] and out["session"])
-        self.assertEqual(out["recovery"], "HRV อยู่ในเกณฑ์ดี")
+        self.assertEqual(out["summary"], "HRV อยู่ในเกณฑ์ดี")
 
     def test_fallback_red_starts_with_warning(self):
         result = sample_result(races=False)
@@ -539,7 +590,6 @@ class FallbackTests(unittest.TestCase):
         out = summarize.fallback_sections(result)
         self.assertTrue(out["headline"].startswith("⚠️"))
         self.assertEqual(out["session"], "พัก")
-        self.assertEqual(out["races"], "")
 
     def test_fallback_empty_result(self):
         for result in (analyze([], [], TODAY), {}):
@@ -577,7 +627,7 @@ class ProviderTests(unittest.TestCase):
             out, source = summarize.summarize(self.result, fake_cfg(llm_providers=["openai", "anthropic"]))
         self.assertEqual(source, "ChatGPT")
         self.assertEqual(out, sections())
-        oa.assert_called_once_with(self.result, "gpt-5.4-mini", "o-key")
+        oa.assert_called_once_with(self.result, "gpt-5.4-mini", "o-key", None)
         an.assert_not_called()
 
     def test_falls_through_to_next_provider(self):
@@ -729,6 +779,15 @@ class MainTests(unittest.TestCase):
         # still collects today's data: sleep and runs usually land after the summary
         self.assertEqual(self.api.calls - calls_before, 6)  # 5 day endpoints + activities
         self.assertTrue(any("already sent" in line for line in logs.output))
+
+    def test_remembers_advice_for_next_day(self):
+        self.run_main(["--date", "2026-09-19"])
+        summary = mock.Mock(return_value=(sections(), "Claude"))
+        self.run_main(["--date", "2026-09-20"], summary=summary)
+        history = summary.call_args.kwargs["history"]
+        self.assertEqual([h["date"] for h in history], ["2026-09-19"])
+        self.assertEqual(history[0]["session"], "Easy run")
+        self.assertTrue(history[0]["ran"].startswith("road "))  # the fake run on the 19th
 
     def test_readiness_alone_does_not_count_as_synced(self):
         """Garmin publishes readiness hours before the night's sleep upload."""

@@ -20,6 +20,8 @@ RUN_TYPE_KEYS = (
 )
 INDOOR_TYPE_KEYS = ("treadmill_running", "indoor_running", "virtual_run")
 HARD_ANAEROBIC_TE = 2.0
+RACE_CLASH_GAP_DAYS = 42  # two A races closer than this leave little recovery between them
+RACE_CLASH_NOTICE_DAYS = 42  # ...worth a daily flag only once the first of them is this close
 PHASE_NAMES = ("Base", "Build", "Peak", "Taper", "Race day", "Recovery")
 
 
@@ -356,11 +358,12 @@ def _races(races, runs, today: date, trail_week_gain):
     a_sorted = sorted(a_races, key=lambda r: r["date"])
     for first, second in zip(a_sorted, a_sorted[1:]):
         gap = (_d(second["date"]) - _d(first["date"])).days
-        if gap < 42:
+        # The gap never changes, so repeating it every day for months is noise.
+        if gap < RACE_CLASH_GAP_DAYS and (_d(first["date"]) - today).days <= RACE_CLASH_NOTICE_DAYS:
             flags.append(
                 {
                     "level": "info",
-                    "message": f"รายการ A '{first['name']}' และ '{second['name']}' ห่างกันแค่ {gap} วัน เวลาฟื้นตัวระหว่างรายการน้อย",
+                    "message": f"'{first['name']}' กับ '{second['name']}' ห่างกันแค่ {gap} วัน วางแผนฟื้นตัวระหว่างรายการ",
                 }
             )
     return out, _phase(phase_race["days_to_race"]), phase_race["name"], flags, active
@@ -372,11 +375,11 @@ def _flags(totals, trail, load, rec, active_races):
     in_taper_or_recovery = any(-14 <= r["days_to_race"] <= 14 for r in active_races)
     if acwr is not None:
         if acwr > 1.5:
-            flags.append({"level": "red", "message": f"ACWR {acwr} สูงกว่า 1.5 เสี่ยงบาดเจ็บ ควรลดโหลด"})
+            flags.append({"level": "red", "message": "ACWR สูงกว่า 1.5 เสี่ยงบาดเจ็บ ควรลดโหลด"})
         elif acwr > 1.3:
-            flags.append({"level": "yellow", "message": f"ACWR {acwr} อยู่ในช่วง 1.3–1.5 โหลดเพิ่มเร็ว ระวัง"})
+            flags.append({"level": "yellow", "message": "ACWR อยู่ในช่วง 1.3–1.5 โหลดเพิ่มเร็ว"})
         elif acwr < 0.8 and not in_taper_or_recovery:
-            flags.append({"level": "yellow", "message": f"ACWR {acwr} ต่ำกว่า 0.8 โหลดลดลงมาก"})
+            flags.append({"level": "yellow", "message": "ACWR ต่ำกว่า 0.8 โหลดลดลงมาก"})
 
     hrv = rec["hrv"]
     hrv_low = (
@@ -385,9 +388,7 @@ def _flags(totals, trail, load, rec, active_races):
         and hrv["last_night"] < hrv["baseline_low"]
     )
     if hrv_low:
-        flags.append(
-            {"level": "yellow", "message": f"HRV เมื่อคืน {hrv['last_night']:g} ต่ำกว่า baseline ({hrv['baseline_low']:g})"}
-        )
+        flags.append({"level": "yellow", "message": "HRV เมื่อคืนต่ำกว่า baseline"})
 
     rhr = rec["rhr"]
     if rhr["yesterday"] is not None and rhr["avg_14d"] is not None and rhr["yesterday"] >= rhr["avg_14d"] + 5:
@@ -395,41 +396,37 @@ def _flags(totals, trail, load, rec, active_races):
             flags.append(
                 {
                     "level": "red",
-                    "message": f"RHR เมื่อวาน {rhr['yesterday']:g} สูงกว่าค่าเฉลี่ย 14 วัน ({rhr['avg_14d']:g}) ร่วมกับ HRV ต่ำ ควรพัก ถ้ามีอาการป่วยหรือเจ็บให้ปรึกษาแพทย์",
+                    "message": "RHR สูงกว่าปกติร่วมกับ HRV ต่ำ ควรพัก ถ้ามีอาการป่วยหรือเจ็บให้ปรึกษาแพทย์",
                 }
             )
         else:
-            flags.append(
-                {"level": "yellow", "message": f"RHR เมื่อวาน {rhr['yesterday']:g} สูงกว่าค่าเฉลี่ย 14 วัน ({rhr['avg_14d']:g}) ≥ 5 bpm"}
-            )
+            flags.append({"level": "yellow", "message": "RHR เมื่อวานสูงกว่าค่าเฉลี่ย 14 วันเกิน 5 bpm"})
 
     sleep = rec["sleep"]
-    if sleep["last_night_h"] is not None and sleep["last_night_h"] < 6:
-        flags.append({"level": "yellow", "message": f"นอนเมื่อคืน {sleep['last_night_h']:.1f} ชม. น้อยกว่า 6 ชม."})
-    if sleep["avg_7d_h"] is not None and sleep["avg_7d_h"] < 6.5:
-        flags.append({"level": "yellow", "message": f"นอนเฉลี่ย 7 วัน {sleep['avg_7d_h']:.1f} ชม. น้อยกว่า 6.5 ชม."})
+    short_night = sleep["last_night_h"] is not None and sleep["last_night_h"] < 6
+    short_week = sleep["avg_7d_h"] is not None and sleep["avg_7d_h"] < 6.5
+    if short_night and short_week:
+        flags.append({"level": "yellow", "message": "นอนน้อยทั้งเมื่อคืน (ไม่ถึง 6 ชม.) และเฉลี่ย 7 วัน (ไม่ถึง 6.5 ชม.)"})
+    elif short_night:
+        flags.append({"level": "yellow", "message": "นอนเมื่อคืนน้อยกว่า 6 ชม."})
+    elif short_week:
+        flags.append({"level": "yellow", "message": "นอนเฉลี่ย 7 วันน้อยกว่า 6.5 ชม."})
 
     if totals["km_change_pct"] is not None and totals["km_change_pct"] > 30:
-        flags.append(
-            {"level": "yellow", "message": f"ระยะวิ่งสัปดาห์นี้เพิ่มขึ้น {totals['km_change_pct']}% จากสัปดาห์ก่อน (เกิน 30%)"}
-        )
+        flags.append({"level": "yellow", "message": "ระยะวิ่งสัปดาห์นี้เพิ่มขึ้นเกิน 30% จากสัปดาห์ก่อน"})
     prev_gain = trail["prev_week_elev_gain_m"]
     if prev_gain and prev_gain > 0:
         change = _pct_change(trail["elev_gain_m"], prev_gain)
         if change is not None and change > 30:
-            flags.append(
-                {"level": "yellow", "message": f"D+ trail สัปดาห์นี้เพิ่มขึ้น {_r(change)}% (เกิน 30%) ระวังเข่าและน่อง"}
-            )
+            flags.append({"level": "yellow", "message": "D+ trail สัปดาห์นี้เพิ่มขึ้นเกิน 30% ระวังเข่าและน่อง"})
 
     if load["rest_days_7d"] == 0:
         flags.append({"level": "yellow", "message": "ไม่มีวันพักเลยใน 7 วันที่ผ่านมา"})
     if load["hard_pct_7d"] is not None and load["hard_pct_7d"] > 50:
-        flags.append(
-            {"level": "yellow", "message": f"{load['hard_pct_7d']}% ของการวิ่ง 7 วันเป็นการซ้อมหนัก ซ้อมหนักถี่เกินไป"}
-        )
+        flags.append({"level": "yellow", "message": "การวิ่งเกินครึ่งใน 7 วันเป็นการซ้อมหนัก ซ้อมหนักถี่เกินไป"})
     level = rec["readiness"]["level"]
     if isinstance(level, str) and level.upper() in ("LOW", "POOR"):
-        flags.append({"level": "yellow", "message": f"Training readiness อยู่ระดับ {level}"})
+        flags.append({"level": "yellow", "message": "Training readiness ต่ำ"})
     return flags
 
 
@@ -440,27 +437,18 @@ def _weather_flags(weather):
     flags = []
     window = weather.get("window") or "ช่วงซ้อม"
     heat_level = weather.get("heat_level")
-    if heat_level in ("high", "severe"):
-        temp, dew = weather.get("temp_max_c"), weather.get("dew_point_c")
-        if heat_level == "severe":
-            advice = "เลี่ยงซ้อมหนัก วิ่งเบา ๆ หรือย้ายเข้าในร่ม"
-        else:
-            advice = (
-                f"pace จะช้าลงราว {weather['pace_slowdown_pct_min']:g}–{weather['pace_slowdown_pct_max']:g}% "
-                "ลดความหนักและดื่มน้ำให้พอ"
-            )
-        flags.append(
-            {"level": "yellow", "message": f"ร้อนชื้นมากช่วง {window} ({temp:g}°C จุดน้ำค้าง {dew:g}°C) {advice}"}
-        )
+    # Temperatures, dew point and the pace range are in the weather fields; how to adapt is in the recommendation.
+    if heat_level == "severe":
+        flags.append({"level": "yellow", "message": f"ร้อนชื้นรุนแรงช่วง {window} เลี่ยงซ้อมหนัก"})
+    elif heat_level == "high":
+        flags.append({"level": "yellow", "message": f"ร้อนชื้นมากช่วง {window}"})
     if weather.get("thunderstorm"):
-        flags.append(
-            {"level": "yellow", "message": f"ช่วง {window} มีพายุฝนฟ้าคะนอง ระวังฟ้าผ่า เลี่ยงที่โล่งและสันเขา"}
-        )
+        flags.append({"level": "yellow", "message": f"พายุฝนฟ้าคะนองช่วง {window} ระวังฟ้าผ่า เลี่ยงที่โล่งและสันเขา"})
     pm25 = weather.get("pm25")
     if pm25 is not None and pm25 > 75:
-        flags.append({"level": "yellow", "message": f"PM2.5 {pm25:g} µg/m³ มีผลต่อสุขภาพ ควรวิ่งในร่มหรือบนลู่"})
+        flags.append({"level": "yellow", "message": "ฝุ่น PM2.5 มีผลต่อสุขภาพ ควรวิ่งในร่มหรือบนลู่"})
     elif pm25 is not None and pm25 > 37.5:
-        flags.append({"level": "info", "message": f"PM2.5 {pm25:g} µg/m³ เริ่มมีผลต่อสุขภาพ ลดความหนักลง"})
+        flags.append({"level": "info", "message": "ฝุ่น PM2.5 เริ่มมีผลต่อสุขภาพ"})
     if (weather.get("rain_mm") or 0) >= 10:
         flags.append({"level": "info", "message": f"ฝนหนักช่วง {window} ทางลื่น โดยเฉพาะเทรล"})
     if (weather.get("gust_kmh") or 0) >= 50:

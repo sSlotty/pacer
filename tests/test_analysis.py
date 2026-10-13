@@ -251,6 +251,13 @@ class FlagTests(unittest.TestCase):
             self.set_day(i, sleep_seconds=6.2 * 3600)
         self.assertTrue(has_flag(self.analyze(), "yellow", "6.5"))
 
+    def test_short_night_and_week_share_one_flag(self):
+        for i in range(7):
+            self.set_day(i, sleep_seconds=5 * 3600)
+        sleep_flags = [f for f in self.analyze()["flags"] if "นอน" in f["message"]]
+        self.assertEqual(len(sleep_flags), 1)
+        self.assertIn("ทั้งเมื่อคืน", sleep_flags[0]["message"])
+
     def test_weekly_km_jump(self):
         self.runs.append(run(1, km=10, load=1))
         res = self.analyze()
@@ -358,6 +365,11 @@ class RaceTests(unittest.TestCase):
         self.assertEqual(res["status"], "green")  # info does not change status
         res = analyze(self.daily, self.runs, TODAY, [self.race(30, "A"), self.race(80, "A")])
         self.assertFalse(any(f["level"] == "info" for f in res["flags"]))
+        # a clash months away is not news every morning; it shows once the first race is <= 42 days out
+        far = [self.race(100, "A"), self.race(113, "A")]
+        self.assertFalse(any(f["level"] == "info" for f in analyze(self.daily, self.runs, TODAY, far)["flags"]))
+        near = [self.race(42, "A"), self.race(55, "A")]
+        self.assertTrue(has_flag(analyze(self.daily, self.runs, TODAY, near), "info", "13 วัน"))
 
     def test_trail_readiness(self):
         r = self.race(60, rtype="trail", distance_km=50, elevation_m=2500)

@@ -156,12 +156,13 @@ def main(argv=None) -> int:
 
         # Only runs that will post get this far, so polling runs never call the weather API.
         forecast = fetch_weather(cfg, db, today)
-        result = analysis.analyze(
-            daily, db.runs_since(since), today, cfg.races, cfg.trail_elev_threshold, weather=forecast
-        )
+        runs = db.runs_since(since)
+        result = analysis.analyze(daily, runs, today, cfg.races, cfg.trail_elev_threshold, weather=forecast)
+        notes_since = (today - timedelta(days=summarize.ADVICE_DAYS)).isoformat()
+        history = summarize.advice_history(db.recent_notes(notes_since, today.isoformat()), runs, today)
 
         try:
-            sections, source = summarize.summarize(result, cfg)
+            sections, source = summarize.summarize(result, cfg, history=history)
             log.info("Summary written by %s", source)
         except Exception as e:  # noqa: BLE001 — any LLM failure falls back to rule-based text
             log.error("LLM summary failed (%s); using fallback text", e)
@@ -178,7 +179,7 @@ def main(argv=None) -> int:
         except Exception as e:  # noqa: BLE001
             log.error("Discord send failed: %s", e)
             return 1
-        db.mark_sent(today.isoformat(), source, result["status"])
+        db.mark_sent(today.isoformat(), source, result["status"], sections)
         log.info("Summary sent to Discord (status=%s)", result["status"])
         return 0
     finally:

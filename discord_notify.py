@@ -102,14 +102,8 @@ def _description(result: dict, sections: dict) -> str:
         session = _clip(sections.get("session") or "แผนวันนี้", 60)
         parts.append(f"**🎯 แนะนำวันนี้ · {session}**\n{sections['recommendation']}")
 
-    for key, heading in (
-        ("recovery", "🛌 การฟื้นตัว"),
-        ("running", "🏃 การวิ่ง 7 วัน"),
-        ("load", "📈 โหลด"),
-        ("races", "🏁 รายการแข่ง"),
-    ):
-        if sections.get(key):
-            parts.append(f"**{heading}**\n{sections[key]}")
+    if sections.get("summary"):
+        parts.append(f"**📝 ภาพรวม**\n{sections['summary']}\n")
     return "\n\n".join(parts)
 
 

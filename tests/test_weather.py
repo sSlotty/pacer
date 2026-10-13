@@ -117,16 +117,18 @@ class WeatherFlagTests(unittest.TestCase):
         self.assertEqual(result["status"], "yellow")
         self.assertTrue(has_flag(result, "yellow", "ร้อนชื้นมาก"))
         self.assertTrue(has_flag(result, "yellow", "ฟ้าผ่า"))
-        self.assertTrue(has_flag(result, "yellow", "PM2.5 90"))
+        self.assertTrue(has_flag(result, "yellow", "PM2.5"))
 
-    def test_high_heat_flag_quotes_pace_range(self):
+    def test_heat_flag_leaves_numbers_to_the_fields(self):
         result = self.analyze_with(assess(forecast(temp=30, dew=26)))
-        self.assertTrue(has_flag(result, "yellow", "6–10%"))
+        heat = [f["message"] for f in result["flags"] if "ร้อนชื้น" in f["message"]]
+        self.assertEqual(heat, ["ร้อนชื้นมากช่วง 07:00–09:00"])  # °C, dew point and pace % are in the fields
+        self.assertEqual(result["weather"]["pace_slowdown_pct_max"], 10)
 
     def test_info_flags(self):
         result = self.analyze_with(assess(forecast(temp=22, dew=15, rain=5.0, gust=55.0), hourly(pm2_5=50.0)))
         self.assertEqual(result["status"], "green")
-        self.assertTrue(has_flag(result, "info", "PM2.5 50"))
+        self.assertTrue(has_flag(result, "info", "PM2.5"))
         self.assertTrue(has_flag(result, "info", "ฝนหนัก"))
         self.assertTrue(has_flag(result, "info", "ลมกระโชก"))
 
