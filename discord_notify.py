@@ -24,6 +24,8 @@ EMBED_LIMIT = 6000
 MAX_FIELDS = 25
 BLANK = "​"
 NO_RUNS = "ไม่มีการวิ่ง"
+# Mentions inside an embed never ping, so the tag goes in `content` and must be allowed explicitly.
+MENTION = "@everyone"
 
 
 # ---------------------------------------------------------------- formatting helpers
@@ -368,8 +370,17 @@ def build_embed(result: dict, sections: dict, source: str | None = "Claude") -> 
     return embed
 
 
+def _payload(embed: dict) -> dict:
+    return {
+        "username": "Pacer",
+        "content": MENTION,
+        "allowed_mentions": {"parse": ["everyone"]},
+        "embeds": [embed],
+    }
+
+
 def build_payload(result: dict, sections: dict, source: str | None = "Claude") -> dict:
-    return {"username": "Pacer", "embeds": [build_embed(result, sections, source)]}
+    return _payload(build_embed(result, sections, source))
 
 
 def send(webhook_url: str, payload: dict) -> None:
@@ -396,4 +407,4 @@ def send_auth_alert(webhook_url: str, detail: str = "") -> None:
         ),
         "color": COLORS["red"],
     }
-    send(webhook_url, {"username": "Pacer", "embeds": [embed]})
+    send(webhook_url, _payload(embed))

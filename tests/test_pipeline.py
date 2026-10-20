@@ -419,6 +419,8 @@ class DiscordTests(unittest.TestCase):
     def test_single_dashboard_embed(self):
         payload = discord_notify.build_payload(sample_result(), sections())
         self.assertEqual(payload["username"], "Pacer")
+        self.assertEqual(payload["content"], "@everyone")
+        self.assertEqual(payload["allowed_mentions"], {"parse": ["everyone"]})
         self.assertEqual(len(payload["embeds"]), 1)
         embed = payload["embeds"][0]
         self.check_limits(embed)

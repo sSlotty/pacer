@@ -359,7 +359,7 @@ flag สภาพอากาศประเมินจาก slot ที่ด
 
 ## 10. Discord (discord_notify.py)
 
-ส่ง **1 ข้อความ 1 embed แบบ dashboard** ผ่าน `requests.post(webhook, json={"username": "Pacer", "embeds": [embed]}, timeout=20)` สีของ embed ตามสถานะ: green `0x2ECC71`, yellow `0xF1C40F`, red `0xE74C3C`
+ส่ง **1 ข้อความ 1 embed แบบ dashboard** ผ่าน `requests.post(webhook, json={"username": "Pacer", "content": "@everyone", "allowed_mentions": {"parse": ["everyone"]}, "embeds": [embed]}, timeout=20)` (tag `@everyone` เพื่อให้มือถือแจ้งเตือน ต้องอยู่ใน `content` เพราะ mention ใน embed ไม่ ping ใช้กับข้อความเตือน login ล้มเหลวด้วย) สีของ embed ตามสถานะ: green `0x2ECC71`, yellow `0xF1C40F`, red `0xE74C3C`
 
 **title**: `🏃 <วัน วันที่ เดือน ปี ภาษาไทย> · <ป้ายสถานะ>` (🟢 พร้อมซ้อม / 🟡 ซ้อมได้แต่ระวัง / 🔴 ควรพัก)
 
